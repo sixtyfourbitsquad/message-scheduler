@@ -1,0 +1,33 @@
+from bot.keyboards.inline import (
+    kb_back_home,
+    kb_broadcast_entry,
+    kb_broadcast_preview,
+    kb_button_builder_controls,
+    kb_confirm_delete,
+    kb_main_menu,
+    kb_posts_row,
+    kb_schedule_kind,
+    kb_schedule_preview,
+    kb_scheduler_entry,
+    kb_settings_menu,
+    kb_stats_refresh,
+    kb_welcome_menu,
+    kb_yes_no_skip,
+)
+
+__all__ = [
+    "kb_back_home",
+    "kb_broadcast_entry",
+    "kb_broadcast_preview",
+    "kb_button_builder_controls",
+    "kb_confirm_delete",
+    "kb_main_menu",
+    "kb_posts_row",
+    "kb_schedule_kind",
+    "kb_schedule_preview",
+    "kb_scheduler_entry",
+    "kb_settings_menu",
+    "kb_stats_refresh",
+    "kb_welcome_menu",
+    "kb_yes_no_skip",
+]

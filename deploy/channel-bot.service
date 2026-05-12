@@ -1,0 +1,21 @@
+[Unit]
+Description=Telegram Channel Automation Bot (FastAPI webhook + PTB)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/channel-bot
+EnvironmentFile=/opt/channel-bot/.env
+ExecStart=/opt/channel-bot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=3
+
+# Hardening (tune to your environment)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

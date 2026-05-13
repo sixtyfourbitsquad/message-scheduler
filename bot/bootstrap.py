@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application
-
-from bot import models  # noqa: F401 — register ORM tables with metadata
 from bot.config.settings import settings
 from bot.database import Base
 from bot.database.session import dispose_engine, get_engine, init_engine
@@ -55,18 +54,27 @@ async def init_bot_runtime() -> None:
         ok, body = await update_duckdns(settings.duckdns_domain, settings.duckdns_token)
         log.info("DuckDNS startup update: ok=%s body=%s", ok, body)
 
-    await app.bot.set_webhook(
-        url=settings.full_webhook_url,
-        secret_token=settings.webhook_secret_token,
-        allowed_updates=[
-            "message",
-            "edited_message",
-            "callback_query",
-            "chat_member",
-            "my_chat_member",
-        ],
-    )
-    log.info("Webhook set to %s", settings.full_webhook_url)
+    try:
+        await app.bot.set_webhook(
+            url=settings.full_webhook_url,
+            secret_token=settings.webhook_secret_token,
+            allowed_updates=[
+                "message",
+                "edited_message",
+                "callback_query",
+                "chat_member",
+                "my_chat_member",
+            ],
+        )
+        log.info("Webhook set to %s", settings.full_webhook_url)
+    except (BadRequest, TelegramError) as e:
+        log.error(
+            "setWebhook failed (%s). Bot process will keep running but Telegram will not deliver "
+            "updates until the URL is reachable. Check WEBHOOK_BASE_URL DNS and HTTPS, then restart.",
+            e,
+        )
+    except Exception as e:
+        log.error("setWebhook failed: %s", e)
 
     _application = app
 

@@ -1,70 +1,74 @@
-"""Welcome new members in the linked discussion supergroup."""
+"""Detect target channel joins/leaves: register subscribers, welcome in DM when possible."""
 
 from __future__ import annotations
 
-import asyncio
-import logging
-
 from telegram import Update
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import ContextTypes
 
 from bot.database.session import get_session_factory
-from bot.services.content_poster import send_welcome_to_group
+from bot.services.channel_subscriber_service import record_channel_join, record_channel_leave
 from bot.services.settings_service import get_or_create_settings
+from bot.services.welcome_dm import send_welcome_for_subscriber
 from bot.services.welcome_service import get_or_create_welcome
 
-log = logging.getLogger(__name__)
 
-
-async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Detect joins in the configured discussion group and post the welcome message."""
-    res = update.chat_member
-    if not res:
-        return
-
-    old = res.old_chat_member.status
-    new = res.new_chat_member.status
-
-    became_member = new in {ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED} and old not in {
+def _became_member(old: ChatMemberStatus, new: ChatMemberStatus) -> bool:
+    return new in {ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED} and old not in {
         ChatMemberStatus.MEMBER,
         ChatMemberStatus.RESTRICTED,
     }
-    if not became_member:
+
+
+def _became_left(old: ChatMemberStatus, new: ChatMemberStatus) -> bool:
+    return old in {ChatMemberStatus.MEMBER, ChatMemberStatus.RESTRICTED} and new in {
+        ChatMemberStatus.LEFT,
+        ChatMemberStatus.BANNED,
+    }
+
+
+async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Track subscribers on the configured public channel and send welcome DMs when allowed.
+
+    Telegram only allows DMs after the user has opened the bot (`/start`); until then we
+    still save them for subscriber broadcasts and deliver welcome on first `/start`.
+    """
+    res = update.chat_member
+    if not res or res.chat.type != ChatType.CHANNEL:
         return
 
     factory = get_session_factory()
     async with factory() as session:
         cfg = await get_or_create_settings(session)
-        if cfg.discussion_group_id is None or int(res.chat.id) != int(cfg.discussion_group_id):
+        if cfg.target_channel_id is None or int(res.chat.id) != int(cfg.target_channel_id):
             return
+
+        old = res.old_chat_member.status
+        new = res.new_chat_member.status
+        user = res.new_chat_member.user
+        if not user or user.is_bot:
+            return
+
+        uid = int(user.id)
+        ch_id = int(res.chat.id)
+
+        if _became_left(old, new):
+            await record_channel_leave(session, channel_id=ch_id, user_id=uid)
+            await session.commit()
+            return
+
+        if not _became_member(old, new):
+            return
+
+        await record_channel_join(session, channel_id=ch_id, user=user)
+        await session.flush()
         w = await get_or_create_welcome(session)
-        if not w.enabled:
-            return
-        text = w.text
-        media = w.media_json
-        buttons = w.buttons_json
         delete_after = w.delete_after_seconds
-
-    try:
-        mid = await send_welcome_to_group(
+        await send_welcome_for_subscriber(
             context.bot,
-            group_chat_id=int(res.chat.id),
-            text=text,
-            media_json=media,
-            buttons_json=buttons,
-            reply_to_message_id=None,
+            session,
+            user_id=uid,
+            delete_after_seconds=delete_after,
         )
-    except Exception as e:
-        log.exception("welcome send failed: %s", e)
-        return
-
-    if delete_after and mid and int(delete_after) > 0:
-        async def _delete_later() -> None:
-            await asyncio.sleep(int(delete_after))
-            try:
-                await context.bot.delete_message(chat_id=res.chat.id, message_id=mid)
-            except Exception as e:
-                log.info("welcome auto-delete failed: %s", e)
-
-        asyncio.create_task(_delete_later())
+        await session.commit()

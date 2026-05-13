@@ -11,6 +11,7 @@ from telegram import Message, Update
 from telegram.ext import ContextTypes
 
 from bot.database.session import get_session_factory
+from bot.services.bot_user_service import record_bot_user_touch
 from bot.handlers.helpers import esc
 from bot.keyboards.inline import (
     kb_button_builder_controls,
@@ -42,8 +43,7 @@ from bot.utils.fsm import (
     ST_WEL_BTN_TEXT,
     ST_WEL_BTN_URL,
     ST_WEL_DELETE_AFTER,
-    ST_WEL_MEDIA,
-    ST_WEL_TEXT,
+    ST_WEL_WAIT_CONTENT,
     get_data,
     get_state,
     set_state,
@@ -90,6 +90,12 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not allowed:
         await update.message.reply_text(f"⛔ {denial or 'Not allowed.'}")
         return
+
+    u = update.effective_user
+    if u:
+        async with get_session_factory()() as session:
+            await record_bot_user_touch(session, u)
+            await session.commit()
 
     msg = update.message
     ud = context.user_data
@@ -191,27 +197,23 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await _render_sch_preview_panel(update, context)
         return
 
-    if st == ST_WEL_TEXT:
-        async with get_session_factory()() as session:
-            w = await get_or_create_welcome(session)
-            w.text = msg.text
-            await session.commit()
-        set_state(ud, None)
-        await msg.reply_text("✅ Welcome text saved.", reply_markup=kb_welcome_menu())
-        return
-
-    if st == ST_WEL_MEDIA:
+    if st == ST_WEL_WAIT_CONTENT:
         payload = message_to_content_dict(msg)
-        if payload.get("type") not in {"photo", "video", "animation"}:
-            await msg.reply_text("Send a photo, video, or GIF.")
+        if payload.get("type") == "unsupported":
+            await msg.reply_text(payload.get("hint", "Unsupported message."))
             return
-        media = {"type": payload["type"], "file_id": payload["file_id"]}
         async with get_session_factory()() as session:
             w = await get_or_create_welcome(session)
-            w.media_json = media
+            w.content_json = payload
+            w.text = None
+            w.media_json = None
             await session.commit()
         set_state(ud, None)
-        await msg.reply_text("✅ Welcome media saved.", reply_markup=kb_welcome_menu())
+        await msg.reply_text(
+            "✅ Welcome #1 saved. Add URL buttons from the Welcome menu if you want; "
+            "those buttons are used for join DMs, test-to-channel, and test-to-you.",
+            reply_markup=kb_welcome_menu(),
+        )
         return
 
     if st == ST_WEL_BTN_TEXT:

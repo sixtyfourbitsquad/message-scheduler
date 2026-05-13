@@ -60,10 +60,14 @@ def kb_broadcast_preview() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ Send now", callback_data="bc:send"),
-                InlineKeyboardButton("⏰ Schedule", callback_data="bc:queue_sch"),
+                InlineKeyboardButton("📣 Channel only", callback_data="bc:send:ch"),
+                InlineKeyboardButton("📣+💬 Channel + DMs", callback_data="bc:send:both"),
             ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="bc:cancel")],
+            [InlineKeyboardButton("💬 Subscribers (DM only)", callback_data="bc:send:dm")],
+            [
+                InlineKeyboardButton("⏰ Schedule", callback_data="bc:queue_sch"),
+                InlineKeyboardButton("❌ Cancel", callback_data="bc:cancel"),
+            ],
         ]
     )
 
@@ -102,9 +106,10 @@ def kb_welcome_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🔛 Toggle enable", callback_data="wel:toggle")],
-            [InlineKeyboardButton("✏️ Set text", callback_data="wel:text")],
-            [InlineKeyboardButton("🖼️ Set media", callback_data="wel:media")],
-            [InlineKeyboardButton("🔗 Buttons (optional)", callback_data="wel:btn")],
+            [InlineKeyboardButton("📩 Set welcome #1 (forward or send)", callback_data="wel:set")],
+            [InlineKeyboardButton("🔗 Buttons: text then link", callback_data="wel:btn")],
+            [InlineKeyboardButton("📣 Test-post to channel", callback_data="wel:ch")],
+            [InlineKeyboardButton("💬 Test-send to me (private)", callback_data="wel:dm")],
             [InlineKeyboardButton("🧹 Auto-delete seconds", callback_data="wel:del")],
             [InlineKeyboardButton("⬅️ Back", callback_data="m:home")],
         ]

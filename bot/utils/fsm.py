@@ -27,6 +27,7 @@ ST_SCH_TITLE = "sch_title"
 ST_SCH_PREVIEW = "sch_preview"
 
 # Welcome flow
+ST_WEL_WAIT_CONTENT = "wel_content"
 ST_WEL_TEXT = "wel_text"
 ST_WEL_MEDIA = "wel_media"
 ST_WEL_BUTTONS = "wel_buttons"

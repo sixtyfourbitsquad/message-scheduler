@@ -22,6 +22,7 @@ from bot.database.session import get_session_factory
 from bot.models.failed_delivery import FailedDelivery
 from bot.models.schedule import Schedule, ScheduleKind
 from bot.runtime import get_application
+from bot.services.channel_delivery_service import record_channel_delivery
 from bot.services.content_poster import send_content_to_chat
 from bot.services.settings_service import get_or_create_settings
 from bot.utils import timezones as tzutil
@@ -82,6 +83,12 @@ async def _execute_schedule(schedule_id: int) -> None:
             elif row.kind == ScheduleKind.interval.value and row.interval_seconds:
                 row.next_run_at = datetime.now(tz=timezone.utc) + timedelta(seconds=int(row.interval_seconds))
 
+            await record_channel_delivery(
+                session,
+                channel_id=int(channel_id),
+                kind="schedule",
+                schedule_id=int(row.id),
+            )
             await session.commit()
 
             if row.kind == ScheduleKind.once.value:

@@ -16,7 +16,8 @@ def register_handlers(application: Application) -> None:
 
     Notes:
     - Only `/start` uses a command; everything else is inline.
-    - `ChatMemberHandler` requires the bot to be an administrator in the discussion group.
+    - `ChatMemberHandler` requires the bot to be a **channel** administrator to see joins
+      on the target public channel (welcome DMs).
     """
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(m|bc|sch|lst|wel|cfg|btn):"))

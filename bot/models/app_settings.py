@@ -1,4 +1,4 @@
-"""Singleton-style application settings row (one channel, one discussion group)."""
+"""Singleton-style application settings row (one channel, optional discussion group)."""
 
 from datetime import datetime
 from typing import Optional
@@ -22,7 +22,7 @@ class AppSettings(Base):
 
     # Target public channel (numeric ID, often negative like -100...)
     target_channel_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    # Linked discussion supergroup for welcome / member events
+    # Optional linked discussion supergroup (legacy / manual use; welcome uses channel joins)
     discussion_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")

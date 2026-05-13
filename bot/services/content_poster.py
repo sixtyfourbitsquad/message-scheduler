@@ -18,12 +18,18 @@ from bot.utils.message_serialize import entities_from_storage
 log = logging.getLogger(__name__)
 
 
+def _caption_entity_kwargs(content: dict[str, Any]) -> dict[str, Any]:
+    ce = entities_from_storage(content.get("caption_entities"))
+    return {"caption_entities": ce} if ce else {}
+
+
 async def send_content_to_chat(
     bot: Bot,
     *,
     chat_id: int,
     content: dict[str, Any],
     buttons_json: list[list[dict[str, str]]] | None = None,
+    reply_to_message_id: int | None = None,
 ) -> int | None:
     """
     Send payload to `chat_id`. Returns message_id on success, None on unsupported/failure.
@@ -32,6 +38,9 @@ async def send_content_to_chat(
     """
     markup = rows_from_json(buttons_json)
     ctype = content.get("type")
+    thread_kw: dict[str, Any] = {}
+    if reply_to_message_id is not None:
+        thread_kw["reply_to_message_id"] = reply_to_message_id
 
     try:
         if ctype == "text":
@@ -42,12 +51,14 @@ async def send_content_to_chat(
                     text=content["text"],
                     reply_markup=markup,
                     entities=ents,
+                    **thread_kw,
                 )
             except Exception:
                 msg = await bot.send_message(
                     chat_id=chat_id,
                     text=content["text"],
                     reply_markup=markup,
+                    **thread_kw,
                 )
             return msg.message_id
         if ctype == "photo":
@@ -56,6 +67,8 @@ async def send_content_to_chat(
                 photo=content["file_id"],
                 caption=content.get("caption"),
                 reply_markup=markup,
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "video":
@@ -64,6 +77,8 @@ async def send_content_to_chat(
                 video=content["file_id"],
                 caption=content.get("caption"),
                 reply_markup=markup,
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "animation":
@@ -72,6 +87,8 @@ async def send_content_to_chat(
                 animation=content["file_id"],
                 caption=content.get("caption"),
                 reply_markup=markup,
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "document":
@@ -81,6 +98,8 @@ async def send_content_to_chat(
                 caption=content.get("caption"),
                 reply_markup=markup,
                 filename=content.get("filename"),
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "audio":
@@ -89,6 +108,8 @@ async def send_content_to_chat(
                 audio=content["file_id"],
                 caption=content.get("caption"),
                 reply_markup=markup,
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "voice":
@@ -97,6 +118,8 @@ async def send_content_to_chat(
                 voice=content["file_id"],
                 caption=content.get("caption"),
                 reply_markup=markup,
+                **_caption_entity_kwargs(content),
+                **thread_kw,
             )
             return msg.message_id
         if ctype == "unsupported":
@@ -107,55 +130,4 @@ async def send_content_to_chat(
         raise
 
     log.warning("Unknown content type: %s", ctype)
-    return None
-
-
-async def send_welcome_to_group(
-    bot: Bot,
-    *,
-    group_chat_id: int,
-    text: str | None,
-    media_json: dict[str, Any] | None,
-    buttons_json: list[list[dict[str, str]]] | None,
-    reply_to_message_id: int | None = None,
-) -> int | None:
-    """
-    Post welcome into the linked discussion *supergroup* chat.
-
-    Optionally thread under the system join service message via `reply_to_message_id`.
-    """
-    markup = rows_from_json(buttons_json)
-    kwargs = {"reply_markup": markup}
-    if reply_to_message_id is not None:
-        kwargs["reply_to_message_id"] = reply_to_message_id
-
-    if media_json and media_json.get("file_id"):
-        t = media_json.get("type", "photo")
-        if t == "photo":
-            msg = await bot.send_photo(
-                chat_id=group_chat_id,
-                photo=media_json["file_id"],
-                caption=text,
-                **kwargs,
-            )
-            return msg.message_id
-        if t == "video":
-            msg = await bot.send_video(
-                chat_id=group_chat_id,
-                video=media_json["file_id"],
-                caption=text,
-                **kwargs,
-            )
-            return msg.message_id
-        if t == "animation":
-            msg = await bot.send_animation(
-                chat_id=group_chat_id,
-                animation=media_json["file_id"],
-                caption=text,
-                **kwargs,
-            )
-            return msg.message_id
-    if text:
-        msg = await bot.send_message(chat_id=group_chat_id, text=text, **kwargs)
-        return msg.message_id
     return None

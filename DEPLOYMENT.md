@@ -86,10 +86,11 @@ sudo journalctl -u channel-bot -f
 ### 6) Telegram channel checklist
 
 - Bot is **admin** in the target channel with permission to **post messages**.
-- If you use welcome messages, configure the **linked discussion supergroup** in Settings and add the bot as a **group admin** (so it can read `chat_member` updates and post welcomes).
+- For **welcome DMs** on channel join: keep the bot a **channel admin** so Telegram sends `chat_member` updates. Users must **`/start` the bot** in private first (Telegram only allows bots to DM users who have opened the chat).
 
 ### 7) Operational notes
 
+- New deploys create tables `bot_users`, `channel_delivery_logs`, and `channel_subscribers` automatically (`create_all`). Existing DBs get them on next bot restart the same way.
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.
 - Schedules are stored in PostgreSQL and reloaded into APScheduler on startup and after Settings “Restart scheduler”.
 - If you change DNS or TLS, reload Nginx and restart the service.

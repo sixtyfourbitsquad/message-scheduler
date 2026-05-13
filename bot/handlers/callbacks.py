@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone
 from sqlalchemy import delete, select, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -27,10 +28,13 @@ from bot.keyboards.inline import (
 from bot.models.broadcast_log import BroadcastLog
 from bot.models.schedule import Schedule, ScheduleKind
 from bot.scheduler.manager import BotScheduler
+from bot.services.broadcast_fanout_service import fanout_dm_to_subscribers
+from bot.services.channel_delivery_service import record_channel_delivery
+from bot.services.channel_subscriber_service import list_active_subscriber_ids
 from bot.services.content_poster import send_content_to_chat
 from bot.services.settings_service import get_or_create_settings
 from bot.services.stats_service import stats_snapshot
-from bot.services.welcome_service import get_or_create_welcome
+from bot.services.welcome_service import effective_welcome_content, get_or_create_welcome
 from bot.utils.fsm import (
     ST_BC_BUTTON_TEXT,
     ST_BC_BUTTON_URL,
@@ -50,8 +54,7 @@ from bot.utils.fsm import (
     ST_WEL_BTN_TEXT,
     ST_WEL_BTN_URL,
     ST_WEL_DELETE_AFTER,
-    ST_WEL_MEDIA,
-    ST_WEL_TEXT,
+    ST_WEL_WAIT_CONTENT,
     get_data,
     get_state,
     reset_fsm,
@@ -176,8 +179,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _render_bc_preview(update, context)
         return
 
-    if data == "bc:send":
-        await _broadcast_send_now(update, context)
+    if data == "bc:send" or data.startswith("bc:send:"):
+        mode = "ch"
+        if data == "bc:send:both":
+            mode = "both"
+        elif data == "bc:send:dm":
+            mode = "dm"
+        await _broadcast_send_now(update, context, delivery=mode)
         return
 
     if data == "bc:queue_sch":
@@ -334,34 +342,140 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await session.commit()
         await _render_welcome_menu(update, context)
         return
-    if data == "wel:text":
-        set_state(context.user_data, ST_WEL_TEXT)
+    if data == "wel:set":
+        set_state(context.user_data, ST_WEL_WAIT_CONTENT)
         await edit_or_send(
             update,
             context,
-            text="Send the welcome <b>text</b> (HTML disabled — plain text).",
+            text=(
+                "<b>Set welcome message #1</b>\n\n"
+                "<b>Forward</b> one message here, or send the same kind of message directly.\n"
+                "Supported: text, photo/video/GIF with caption, document, audio, voice.\n\n"
+                "<i>Tip:</i> formatting and captions are kept when possible."
+            ),
             reply_markup=kb_welcome_menu(),
         )
         return
-    if data == "wel:media":
-        set_state(context.user_data, ST_WEL_MEDIA)
-        await edit_or_send(
-            update,
-            context,
-            text="Send a <b>photo / video / GIF</b> for the welcome message (one message).",
-            reply_markup=kb_welcome_menu(),
-        )
+    if data == "wel:dm":
+        user = update.effective_user
+        if not user:
+            return
+        factory = get_session_factory()
+        async with factory() as session:
+            w = await get_or_create_welcome(session)
+            content = effective_welcome_content(w)
+            buttons = w.buttons_json
+        if not content:
+            await edit_or_send(
+                update,
+                context,
+                text="❌ No welcome content yet. Use <b>Set welcome #1</b> first.",
+                reply_markup=kb_welcome_menu(),
+            )
+            return
+        try:
+            mid = await send_content_to_chat(
+                context.bot, chat_id=user.id, content=content, buttons_json=buttons
+            )
+            if mid:
+                await edit_or_send(
+                    update,
+                    context,
+                    text="✅ Sent a copy to your private chat with the bot (with buttons if configured).",
+                    reply_markup=kb_welcome_menu(),
+                )
+            else:
+                await edit_or_send(
+                    update,
+                    context,
+                    text="❌ Could not send (unsupported content?).",
+                    reply_markup=kb_welcome_menu(),
+                )
+        except Exception as e:
+            await edit_or_send(
+                update,
+                context,
+                text=f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>",
+                reply_markup=kb_welcome_menu(),
+            )
+        return
+    if data == "wel:ch":
+        factory = get_session_factory()
+        async with factory() as session:
+            cfg = await get_or_create_settings(session)
+            channel_id = cfg.target_channel_id
+            w = await get_or_create_welcome(session)
+            content = effective_welcome_content(w)
+            buttons = w.buttons_json
+        if not channel_id:
+            await edit_or_send(
+                update,
+                context,
+                text="❌ Set target channel in ⚙️ Settings first.",
+                reply_markup=kb_welcome_menu(),
+            )
+            return
+        if not content:
+            await edit_or_send(
+                update,
+                context,
+                text="❌ No welcome content yet. Use <b>Set welcome #1</b> first.",
+                reply_markup=kb_welcome_menu(),
+            )
+            return
+        try:
+            mid = await send_content_to_chat(
+                context.bot, chat_id=channel_id, content=content, buttons_json=buttons
+            )
+            if mid:
+                async with get_session_factory()() as session:
+                    await record_channel_delivery(
+                        session,
+                        channel_id=int(channel_id),
+                        kind="welcome_test",
+                        admin_id=update.effective_user.id if update.effective_user else None,
+                    )
+                    await session.commit()
+                await edit_or_send(
+                    update,
+                    context,
+                    text="✅ Posted a copy to your target channel (with buttons if configured).",
+                    reply_markup=kb_welcome_menu(),
+                )
+            else:
+                await edit_or_send(
+                    update,
+                    context,
+                    text="❌ Could not post (unsupported content?).",
+                    reply_markup=kb_welcome_menu(),
+                )
+        except Exception as e:
+            await edit_or_send(
+                update,
+                context,
+                text=f"❌ Post failed:\n<pre>{esc(repr(e))}</pre>",
+                reply_markup=kb_welcome_menu(),
+            )
         return
     if data == "wel:btn":
         d = get_data(context.user_data)
         d["btn_ctx"] = "wel"
-        d["buttons"] = []
+        async with get_session_factory()() as session:
+            w = await get_or_create_welcome(session)
+            existing = w.buttons_json
+        d["buttons"] = deepcopy(existing) if existing else []
         d["btn_newrow"] = True
         set_state(context.user_data, ST_WEL_BTN_TEXT)
         await edit_or_send(
             update,
             context,
-            text="Welcome buttons: send <b>label</b>, then you'll be asked for URL.",
+            text=(
+                "<b>URL buttons</b> under the welcome (used for join DMs, test-to-channel, "
+                "and test-to-you).\n\n"
+                "<b>1.</b> Send the button text.\n"
+                "<b>2.</b> Send the link (<code>https://…</code>).\n"
+                "Repeat for more buttons, then tap <b>Done</b>."
+            ),
             reply_markup=kb_button_builder_controls(),
         )
         return
@@ -394,7 +508,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await edit_or_send(
             update,
             context,
-            text="<b>Set discussion group</b>\n\nForward a message from the linked supergroup or send its chat id.",
+            text=(
+                "<b>Set discussion group</b> (optional)\n\n"
+                "Forward a message from a linked supergroup or send its chat id, if you use one."
+            ),
             reply_markup=kb_settings_menu(),
         )
         return
@@ -456,7 +573,11 @@ async def _render_bc_preview(update: Update, context: ContextTypes.DEFAULT_TYPE)
     d = get_data(context.user_data)
     content = d.get("content") or {}
     ctype = content.get("type", "?")
-    preview = f"<b>STEP 3/4 — Preview</b>\n\nType: <code>{esc(str(ctype))}</code>\n"
+    preview = (
+        f"<b>STEP 3/4 — Preview</b>\n\n"
+        f"Type: <code>{esc(str(ctype))}</code>\n"
+        "<i>Choose: channel only, channel + subscriber DMs, or subscribers only.</i>\n"
+    )
     if content.get("type") == "text":
         preview += f"\n{esc(content.get('text','')[:3500])}"
     elif content.get("caption"):
@@ -464,8 +585,14 @@ async def _render_bc_preview(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await edit_or_send(update, context, text=preview, reply_markup=kb_broadcast_preview())
 
 
-async def _broadcast_send_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _broadcast_send_now(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, *, delivery: str = "ch"
+) -> None:
+    """delivery: ch | both | dm — channel post, optional subscriber fan-out in private."""
     factory = get_session_factory()
+    admin_id = update.effective_user.id if update.effective_user else None
+    subscriber_ids: list[int] = []
+
     async with factory() as session:
         cfg = await get_or_create_settings(session)
         channel_id = cfg.target_channel_id
@@ -481,35 +608,129 @@ async def _broadcast_send_now(update: Update, context: ContextTypes.DEFAULT_TYPE
         d = get_data(context.user_data)
         content = d.get("content") or {}
         buttons = d.get("buttons")
-        try:
-            mid = await send_content_to_chat(context.bot, chat_id=channel_id, content=content, buttons_json=buttons)
-            if mid:
-                session.add(
-                    BroadcastLog(
-                        admin_id=update.effective_user.id,
-                        channel_id=channel_id,
-                        status="sent",
-                        payload_summary=str(content.get("type")),
-                    )
-                )
-                await session.commit()
-                reset_fsm(context.user_data)
-                await edit_or_send(update, context, text="✅ Broadcast sent.", reply_markup=kb_main_menu())
-            else:
+
+        if delivery in ("both", "dm"):
+            subscriber_ids = await list_active_subscriber_ids(session)
+
+    ch_mid: int | None = None
+    dm_ok, dm_fail = 0, 0
+
+    try:
+        if delivery in ("ch", "both"):
+            ch_mid = await send_content_to_chat(
+                context.bot, chat_id=int(channel_id), content=content, buttons_json=buttons
+            )
+            if not ch_mid:
                 await edit_or_send(
                     update,
                     context,
-                    text="❌ Unsupported content.",
+                    text="❌ Unsupported content for channel.",
                     reply_markup=kb_main_menu(),
                 )
-        except Exception as e:
-            await session.rollback()
+                return
+
+        if delivery == "dm":
+            if not subscriber_ids:
+                await edit_or_send(
+                    update,
+                    context,
+                    text=(
+                        "❌ No subscribers in the list yet.\n\n"
+                        "People are added when they <b>join your channel</b> (bot must be channel admin). "
+                        "They still must <b>/start</b> this bot before any DM can be delivered."
+                    ),
+                    reply_markup=kb_main_menu(),
+                )
+                return
+            dm_ok, dm_fail = await fanout_dm_to_subscribers(
+                context.bot,
+                user_ids=subscriber_ids,
+                content=content,
+                buttons_json=buttons,
+                channel_id=int(channel_id),
+                admin_id=admin_id,
+            )
+            async with factory() as session:
+                session.add(
+                    BroadcastLog(
+                        admin_id=admin_id,
+                        channel_id=int(channel_id),
+                        status="sent",
+                        payload_summary=str(content.get("type")),
+                        meta={
+                            "delivery": "dm",
+                            "subscriber_dm_ok": dm_ok,
+                            "subscriber_dm_fail": dm_fail,
+                            "subscriber_targets": len(subscriber_ids),
+                        },
+                    )
+                )
+                await session.commit()
+            reset_fsm(context.user_data)
             await edit_or_send(
                 update,
                 context,
-                text=f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>",
+                text=(
+                    f"✅ Subscriber broadcast done.\n"
+                    f"DM ok: <code>{dm_ok}</code> · failed / blocked: <code>{dm_fail}</code> · "
+                    f"list size: <code>{len(subscriber_ids)}</code>"
+                ),
                 reply_markup=kb_main_menu(),
             )
+            return
+
+        if delivery == "both":
+            dm_ok, dm_fail = await fanout_dm_to_subscribers(
+                context.bot,
+                user_ids=subscriber_ids,
+                content=content,
+                buttons_json=buttons,
+                channel_id=int(channel_id),
+                admin_id=admin_id,
+            )
+
+        async with factory() as session:
+            session.add(
+                BroadcastLog(
+                    admin_id=admin_id,
+                    channel_id=int(channel_id),
+                    status="sent",
+                    payload_summary=str(content.get("type")),
+                    meta={
+                        "delivery": delivery,
+                        "subscriber_dm_ok": dm_ok if delivery == "both" else 0,
+                        "subscriber_dm_fail": dm_fail if delivery == "both" else 0,
+                        "subscriber_targets": len(subscriber_ids) if delivery == "both" else 0,
+                    },
+                )
+            )
+            await record_channel_delivery(
+                session,
+                channel_id=int(channel_id),
+                kind="broadcast",
+                admin_id=admin_id,
+            )
+            await session.commit()
+
+        reset_fsm(context.user_data)
+        if delivery == "both":
+            msg = (
+                f"✅ Channel post sent and subscriber DMs finished.\n"
+                f"DM ok: <code>{dm_ok}</code> · failed / blocked: <code>{dm_fail}</code> · "
+                f"list size: <code>{len(subscriber_ids)}</code>"
+            )
+        else:
+            msg = "✅ Broadcast sent to channel."
+        await edit_or_send(update, context, text=msg, reply_markup=kb_main_menu())
+
+    except Exception as e:
+        log.exception("broadcast failed: %s", e)
+        await edit_or_send(
+            update,
+            context,
+            text=f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>",
+            reply_markup=kb_main_menu(),
+        )
 
 
 async def _prompt_time_for_selected_kind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -724,12 +945,15 @@ async def _render_welcome_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     factory = get_session_factory()
     async with factory() as session:
         w = await get_or_create_welcome(session)
+        content = effective_welcome_content(w)
+        ctype = content.get("type") if content else None
+        nrows = len(w.buttons_json or [])
         txt = (
             "<b>👋 Welcome message</b>\n\n"
             f"Enabled: <code>{w.enabled}</code>\n"
             f"Auto-delete: <code>{w.delete_after_seconds or 0}</code>s\n"
-            f"Text set: <code>{bool(w.text)}</code>\n"
-            f"Media set: <code>{bool(w.media_json)}</code>\n"
+            f"Content type: <code>{esc(str(ctype or 'none'))}</code>\n"
+            f"Button rows: <code>{nrows}</code>\n"
         )
     await edit_or_send(update, context, text=txt, reply_markup=kb_welcome_menu())
 
@@ -755,9 +979,22 @@ async def _render_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         snap = await stats_snapshot(session, started_at=started)
     txt = (
         "<b>📊 Statistics</b>\n\n"
-        f"Broadcasts sent: <code>{snap['total_broadcasts']}</code>\n"
-        f"Schedules total: <code>{snap['total_schedules']}</code>\n"
-        f"Active schedules: <code>{snap['active_schedules']}</code>\n"
+        "<b>Channel subscribers</b>\n"
+        f"Active (still in channel): <code>{snap['active_subscribers']}</code>\n"
+        f"Welcome pending (no successful welcome DM yet): <code>{snap['pending_welcome']}</code>\n"
+        "<i>Subscribers are recorded on channel join; DMs require users to /start the bot.</i>\n\n"
+        "<b>Users</b>\n"
+        f"Total who used /start: <code>{snap['total_bot_users']}</code>\n"
+        f"Active (last 7 days): <code>{snap['active_users_7d']}</code>\n"
+        f"Active (last 30 days): <code>{snap['active_users_30d']}</code>\n\n"
+        "<b>Channel posts (via bot, logged)</b>\n"
+        f"Total delivered: <code>{snap['channel_posts_logged']}</code>\n"
+        "<i>Counts broadcasts, scheduler runs, welcome test-to-channel, and subscriber DMs.</i>\n\n"
+        "<b>Schedules</b>\n"
+        f"Total schedule rows: <code>{snap['total_schedules']}</code>\n"
+        f"Active (not paused): <code>{snap['active_schedules']}</code>\n\n"
+        "<b>Broadcasts and health</b>\n"
+        f"Broadcast log rows: <code>{snap['total_broadcasts']}</code>\n"
         f"Failed deliveries: <code>{snap['failed_deliveries']}</code>\n"
         f"Uptime (s): <code>{snap['uptime_seconds']}</code>\n"
     )

@@ -24,7 +24,7 @@ async def user_can_manage_channel(bot: Bot, *, channel_id: int, user_id: int) ->
         return False
 
     status = member.status
-    if status == ChatMemberStatus.CREATOR:
+    if status == ChatMemberStatus.OWNER:
         return True
     if status == ChatMemberStatus.ADMINISTRATOR:
         # PTB v21: ChatMemberAdministrator has can_post_messages optional

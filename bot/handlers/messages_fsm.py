@@ -86,8 +86,9 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     from bot.handlers.gates import ensure_dashboard_access
 
-    if not await ensure_dashboard_access(update, context):
-        await update.message.reply_text("⛔ Not allowed.")
+    allowed, denial = await ensure_dashboard_access(update, context)
+    if not allowed:
+        await update.message.reply_text(f"⛔ {denial or 'Not allowed.'}")
         return
 
     msg = update.message

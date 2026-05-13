@@ -23,16 +23,19 @@ async def ensure_dashboard_access(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     callback_data: str | None = None,
-) -> bool:
+) -> tuple[bool, str | None]:
     """
-    Return True if this update may proceed.
+    Return (allowed, denial_message).
 
     Non-admins are rejected. If a channel is configured, require post rights, but allow a
     small Settings escape hatch (mirrors `middlewares/admin_only.py`).
     """
     user = update.effective_user
     if not user or user.id not in settings.admin_id_set:
-        return False
+        return False, (
+            "Not in ADMIN_TELEGRAM_IDS. Add your numeric Telegram user id on the VPS, "
+            "then restart the bot service."
+        )
 
     factory = get_session_factory()
     async with factory() as session:
@@ -40,18 +43,21 @@ async def ensure_dashboard_access(
         channel_id = cfg.target_channel_id
 
     if channel_id is None:
-        return True
+        return True, None
 
     ok = await user_can_manage_channel(context.bot, channel_id=channel_id, user_id=user.id)
     if ok:
-        return True
+        return True, None
 
     if callback_data and _settings_escape_callback(callback_data):
-        return True
+        return True, None
 
     if update.message:
         st = get_state(context.user_data)
         if st in _SETTINGS_STATES:
-            return True
+            return True, None
 
-    return False
+    return False, (
+        "You need admin + Post messages in the saved target channel; the bot must be "
+        "admin there too. Fix channel under Settings if needed."
+    )

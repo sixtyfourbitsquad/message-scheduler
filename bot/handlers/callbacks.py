@@ -73,8 +73,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     from bot.handlers.gates import ensure_dashboard_access
 
-    if not await ensure_dashboard_access(update, context, callback_data=q.data):
-        await q.answer("⛔ Not allowed", show_alert=True)
+    allowed, denial = await ensure_dashboard_access(update, context, callback_data=q.data)
+    if not allowed:
+        await q.answer(f"⛔ {denial or 'Not allowed.'}", show_alert=True)
         return
 
     await q.answer()

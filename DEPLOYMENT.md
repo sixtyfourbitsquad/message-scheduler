@@ -125,3 +125,4 @@ CREATE TABLE IF NOT EXISTS prediction_engine_states (
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.
 - Schedules are stored in PostgreSQL and reloaded into APScheduler on startup and after Settings “Restart scheduler”.
 - If you change DNS or TLS, reload Nginx and restart the service.
+- After pulling prediction-engine changes: if the service crashes on import with `IndentationError` in `bot/handlers/callbacks.py` (`_schedule_save`), run `git pull` again — `main` includes a follow-up commit that corrects that block.

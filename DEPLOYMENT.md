@@ -91,6 +91,14 @@ sudo journalctl -u channel-bot -f
 ### 7) Operational notes
 
 - New deploys create tables `bot_users`, `channel_delivery_logs`, and `channel_subscribers` automatically (`create_all`). Existing DBs get them on next bot restart the same way.
+- If the `schedules` table existed before multi-slot / pool columns, run once on Postgres:
+
+```sql
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS daily_slot_times JSONB;
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS content_pool_json JSONB;
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS jitter_seconds INTEGER;
+```
+
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.
 - Schedules are stored in PostgreSQL and reloaded into APScheduler on startup and after Settings “Restart scheduler”.
 - If you change DNS or TLS, reload Nginx and restart the service.

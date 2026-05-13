@@ -302,6 +302,9 @@ async def _capture_sch_time(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         d["sch_hhmm"] = raw
         if kind == ScheduleKind.daily.value:
+            d.pop("daily_slot_times", None)
+            d.pop("sch_tz_override", None)
+            d.pop("sch_jitter", None)
             d["sch_next_utc"] = tzutil.next_daily_at(raw, tz, after=now_utc)
         else:
             wd = int(d.get("sch_weekday"))
@@ -327,6 +330,17 @@ async def _render_sch_preview_panel(update: Update, context: ContextTypes.DEFAUL
         f"<b>Scheduler — Preview</b>\n\n"
         f"Title: <code>{esc(str(d.get('sch_title')))}</code>\n"
         f"Kind: <code>{esc(str(d.get('sch_kind')))}</code>\n"
+    )
+    if d.get("daily_slot_times"):
+        summary += (
+            f"Daily slots (local): <code>{esc(str(d.get('daily_slot_times')))}</code>\n"
+            f"Timezone: <code>{esc(str(d.get('sch_tz_override') or 'from Settings'))}</code>\n"
+        )
+    if d.get("sch_jitter") is not None:
+        summary += f"Jitter max: <code>{esc(str(d.get('sch_jitter')))}</code>s\n"
+    if isinstance(d.get("content_pool_json"), list) and d["content_pool_json"]:
+        summary += f"Content pool: <code>{len(d['content_pool_json'])}</code> variants (random per run)\n"
+    summary += (
         f"Next run (UTC): <code>{esc(str(d.get('sch_next_utc')))}</code>\n"
         f"Interval seconds: <code>{esc(str(d.get('sch_interval_s')))}</code>\n"
     )

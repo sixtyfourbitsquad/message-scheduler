@@ -35,6 +35,7 @@ from bot.services.content_poster import send_content_to_chat
 from bot.services.settings_service import get_or_create_settings
 from bot.services.stats_service import stats_snapshot
 from bot.services.welcome_service import effective_welcome_content, get_or_create_welcome
+from bot.utils import timezones as tzutil
 from bot.utils.fsm import (
     ST_BC_BUTTON_TEXT,
     ST_BC_BUTTON_URL,
@@ -62,6 +63,8 @@ from bot.utils.fsm import (
 )
 
 log = logging.getLogger(__name__)
+
+_MAX_SCHED_JITTER_S = 600
 
 
 def _remember_panel_message(message, user_data: dict) -> None:
@@ -255,9 +258,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _remember_panel_message(m, context.user_data)
         return
 
+    if data == "sch:k:daily_peak":
+        d = get_data(context.user_data)
+        d["sch_kind"] = ScheduleKind.daily.value
+        d["daily_slot_times"] = ["10:00", "14:00", "16:00", "18:00", "21:00", "23:00"]
+        d["sch_tz_override"] = "Asia/Kolkata"
+        d["sch_jitter"] = 90
+        d["sch_hhmm"] = None
+        now_utc = datetime.now(tz=timezone.utc)
+        d["sch_next_utc"] = tzutil.next_daily_multi_slots_at(
+            d["daily_slot_times"], "Asia/Kolkata", after=now_utc
+        )
+        set_state(context.user_data, ST_SCH_PREVIEW)
+        from bot.handlers.messages_fsm import _render_sch_preview_panel
+
+        await _render_sch_preview_panel(update, context)
+        return
+
     if data.startswith("sch:k:"):
         kind = data.split(":", 2)[2]
-        get_data(context.user_data)["sch_kind"] = kind
+        d = get_data(context.user_data)
+        d["sch_kind"] = kind
+        d.pop("daily_slot_times", None)
+        d.pop("sch_tz_override", None)
+        d.pop("sch_jitter", None)
         await _prompt_time_for_selected_kind(update, context)
         return
 
@@ -520,7 +544,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await edit_or_send(
             update,
             context,
-            text="Send an IANA timezone, e.g. <code>Europe/Berlin</code> or <code>UTC</code>.",
+            text="Send an IANA timezone, e.g. <code>Asia/Kolkata</code> (India) or <code>UTC</code>.",
             reply_markup=kb_settings_menu(),
         )
         return
@@ -763,7 +787,7 @@ async def _prompt_time_for_selected_kind(update: Update, context: ContextTypes.D
         await edit_or_send(
             update,
             context,
-            text="Daily: send time as <code>HH:MM</code> (24h).",
+            text="Daily: send time as <code>HH:MM</code> (24h, local time in your Settings timezone).",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sch:cancel")]]),
         )
         return
@@ -783,7 +807,7 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     d = get_data(context.user_data)
     async with factory() as session:
         cfg = await get_or_create_settings(session)
-        tz = cfg.timezone or "UTC"
+        tz = d.get("sch_tz_override") or cfg.timezone or "Asia/Kolkata"
 
         sch_kind = d.get("sch_kind")
         title = (d.get("sch_title") or "Scheduled post")[:250]
@@ -800,13 +824,38 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             created_by=update.effective_user.id,
         )
 
+        slot_times = d.get("daily_slot_times")
+        if isinstance(slot_times, list) and len(slot_times) > 0:
+            row.daily_slot_times = [str(x).strip() for x in slot_times if x]
+        else:
+            row.daily_slot_times = None
+
+        pool = d.get("content_pool_json")
+        if isinstance(pool, list) and len(pool) > 0:
+            row.content_pool_json = pool
+        else:
+            row.content_pool_json = None
+
+        if d.get("sch_jitter") is not None:
+            try:
+                row.jitter_seconds = max(0, min(int(d["sch_jitter"]), _MAX_SCHED_JITTER_S))
+            except (TypeError, ValueError):
+                row.jitter_seconds = None
+        else:
+            row.jitter_seconds = None
+
         if sch_kind == ScheduleKind.once.value:
             row.next_run_at = d.get("sch_next_utc")
             row.schedule_summary = "One-time"
         elif sch_kind == ScheduleKind.daily.value:
-            row.time_hhmm = d.get("sch_hhmm")
-            row.next_run_at = d.get("sch_next_utc")
-            row.schedule_summary = f"Daily {row.time_hhmm} ({tz})"
+            if row.daily_slot_times:
+                row.time_hhmm = None
+                row.next_run_at = d.get("sch_next_utc")
+                row.schedule_summary = f"Daily {len(row.daily_slot_times)}× ({tz})"
+            else:
+                row.time_hhmm = d.get("sch_hhmm")
+                row.next_run_at = d.get("sch_next_utc")
+                row.schedule_summary = f"Daily {row.time_hhmm} ({tz})"
         elif sch_kind == ScheduleKind.weekly.value:
             row.weekday = int(d.get("sch_weekday"))
             row.time_hhmm = d.get("sch_hhmm")
@@ -833,6 +882,9 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "time_hhmm",
                     "weekday",
                     "interval_seconds",
+                    "daily_slot_times",
+                    "content_pool_json",
+                    "jitter_seconds",
                 ):
                     setattr(existing, k, getattr(row, k))
                 existing.paused = pause_saved
@@ -886,9 +938,16 @@ async def _render_schedule_detail(update: Update, context: ContextTypes.DEFAULT_
             f"<b>Schedule #{r.id}</b>\n"
             f"Title: {esc(r.title)}\n"
             f"Kind: <code>{esc(r.kind)}</code>\n"
+            f"Timezone: <code>{esc(r.timezone)}</code>\n"
             f"Paused: <code>{r.paused}</code>\n"
             f"Summary: <code>{esc(r.schedule_summary or '')}</code>\n"
         )
+        if r.daily_slot_times:
+            txt += f"Daily slots: <code>{esc(str(r.daily_slot_times))}</code>\n"
+        if r.content_pool_json:
+            txt += f"Content pool entries: <code>{len(r.content_pool_json)}</code> (random each run)\n"
+        if r.jitter_seconds:
+            txt += f"Jitter (max delay after trigger): <code>{r.jitter_seconds}</code>s\n"
     await edit_or_send(update, context, text=txt, reply_markup=kb_posts_row(sid))
 
 
@@ -931,6 +990,26 @@ async def _begin_schedule_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         d["content"] = dict(r.content_json)
         d["buttons"] = r.buttons_json
         d["btn_ctx"] = "sch"
+        d["sch_kind"] = r.kind
+        d["sch_title"] = r.title
+        if r.daily_slot_times:
+            d["daily_slot_times"] = list(r.daily_slot_times)
+            d["sch_tz_override"] = r.timezone
+            d["sch_hhmm"] = None
+            if r.jitter_seconds is not None:
+                d["sch_jitter"] = int(r.jitter_seconds)
+            d["sch_next_utc"] = tzutil.next_daily_multi_slots_at(
+                list(r.daily_slot_times), r.timezone, after=datetime.now(tz=timezone.utc)
+            )
+        if r.content_pool_json:
+            d["content_pool_json"] = list(r.content_pool_json)
+        if r.daily_slot_times:
+            set_state(context.user_data, ST_SCH_PREVIEW)
+            from bot.handlers.messages_fsm import _render_sch_preview_panel
+
+            await _render_sch_preview_panel(update, context)
+            return
+
         set_state(context.user_data, ST_SCH_KIND)
         m = await edit_or_send(
             update,

@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     duckdns_domain: str = Field(default="")
     duckdns_token: str = Field(default="")
 
-    default_timezone: str = Field(default="UTC")
+    default_timezone: str = Field(default="Asia/Kolkata")
     log_level: str = Field(default="INFO")
 
     @field_validator("webhook_base_url")

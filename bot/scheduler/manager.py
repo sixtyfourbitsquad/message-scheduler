@@ -7,7 +7,9 @@ survives process restarts and VPS reboots.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -31,6 +33,17 @@ log = logging.getLogger(__name__)
 
 _DOW = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+_MAX_JITTER_CAP_S = 600
+
+
+def _pick_schedule_content(row: Schedule) -> dict[str, Any]:
+    pool = row.content_pool_json
+    if isinstance(pool, list) and len(pool) > 0:
+        valid = [p for p in pool if isinstance(p, dict) and p.get("type") and p.get("type") != "unsupported"]
+        if valid:
+            return random.choice(valid)
+    return row.content_json or {}
+
 
 async def _execute_schedule(schedule_id: int) -> None:
     """APScheduler entrypoint: load row, post to channel, reschedule if recurring."""
@@ -53,10 +66,16 @@ async def _execute_schedule(schedule_id: int) -> None:
                 await session.commit()
                 return
 
+            if row.jitter_seconds and int(row.jitter_seconds) > 0:
+                cap = min(int(row.jitter_seconds), _MAX_JITTER_CAP_S)
+                await asyncio.sleep(random.randint(0, cap))
+
+            content = _pick_schedule_content(row)
+
             mid = await send_content_to_chat(
                 bot,
                 chat_id=channel_id,
-                content=row.content_json,
+                content=content,
                 buttons_json=row.buttons_json,
             )
             if mid is None:
@@ -66,22 +85,24 @@ async def _execute_schedule(schedule_id: int) -> None:
 
             row.last_run_at = datetime.now(tz=timezone.utc)
 
-            # Compute next occurrence for recurring kinds (for UI / statistics)
+            now_utc = datetime.now(tz=timezone.utc)
             if row.kind == ScheduleKind.once.value:
                 row.next_run_at = None
-            elif row.kind == ScheduleKind.daily.value and row.time_hhmm:
-                row.next_run_at = tzutil.next_daily_at(
-                    row.time_hhmm, row.timezone, after=datetime.now(tz=timezone.utc)
+            elif row.kind == ScheduleKind.daily.value and row.daily_slot_times:
+                row.next_run_at = tzutil.next_daily_multi_slots_at(
+                    list(row.daily_slot_times), row.timezone, after=now_utc
                 )
+            elif row.kind == ScheduleKind.daily.value and row.time_hhmm:
+                row.next_run_at = tzutil.next_daily_at(row.time_hhmm, row.timezone, after=now_utc)
             elif row.kind == ScheduleKind.weekly.value and row.time_hhmm and row.weekday is not None:
                 row.next_run_at = tzutil.next_weekday_at(
                     row.time_hhmm,
                     row.weekday,
                     row.timezone,
-                    after=datetime.now(tz=timezone.utc),
+                    after=now_utc,
                 )
             elif row.kind == ScheduleKind.interval.value and row.interval_seconds:
-                row.next_run_at = datetime.now(tz=timezone.utc) + timedelta(seconds=int(row.interval_seconds))
+                row.next_run_at = now_utc + timedelta(seconds=int(row.interval_seconds))
 
             await record_channel_delivery(
                 session,
@@ -142,10 +163,11 @@ class BotScheduler:
             self._started = False
 
     def remove_job(self, schedule_id: int) -> None:
-        job_id = f"sch_{schedule_id}"
-        job = self.scheduler.get_job(job_id)
-        if job:
-            self.scheduler.remove_job(job_id)
+        prefix = f"sch_{schedule_id}"
+        for job in list(self.scheduler.get_jobs()):
+            jid = job.id
+            if jid == prefix or jid.startswith(prefix + "_"):
+                self.scheduler.remove_job(jid)
 
     async def reload_from_db(self) -> None:
         """Rebuild all jobs from PostgreSQL (call after startup and after schedule edits)."""
@@ -154,8 +176,7 @@ class BotScheduler:
             res = await session.execute(select(Schedule).where(Schedule.paused.is_(False)))
             rows = list(res.scalars().all())
 
-        # Remove jobs that belong to us
-        for job in self.scheduler.get_jobs():
+        for job in list(self.scheduler.get_jobs()):
             if job.id.startswith("sch_"):
                 self.scheduler.remove_job(job.id)
 
@@ -163,15 +184,51 @@ class BotScheduler:
             self._add_job_for_row(row)
 
     def _add_job_for_row(self, row: Schedule) -> None:
-        job_id = f"sch_{row.id}"
-        trigger: Any
         now = datetime.now(tz=timezone.utc)
+        base_id = f"sch_{row.id}"
 
         if row.kind == ScheduleKind.once.value:
             if not row.next_run_at:
                 return
             trigger = DateTrigger(run_date=row.next_run_at)
-        elif row.kind == ScheduleKind.daily.value and row.time_hhmm:
+            self.scheduler.add_job(
+                _execute_schedule,
+                trigger=trigger,
+                id=base_id,
+                kwargs={"schedule_id": row.id},
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
+            )
+            return
+
+        if row.kind == ScheduleKind.daily.value and row.daily_slot_times:
+            slots = [s.strip() for s in row.daily_slot_times if s and ":" in str(s)]
+            if not slots:
+                log.warning("Schedule %s has empty daily_slot_times — skipping", row.id)
+                return
+            for idx, hm in enumerate(slots):
+                hh, mm = str(hm).split(":", 1)
+                trigger = CronTrigger(
+                    hour=int(hh),
+                    minute=int(mm),
+                    second=0,
+                    timezone=row.timezone,
+                )
+                self.scheduler.add_job(
+                    _execute_schedule,
+                    trigger=trigger,
+                    id=f"{base_id}_{idx}",
+                    kwargs={"schedule_id": row.id},
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=300,
+                )
+            return
+
+        if row.kind == ScheduleKind.daily.value and row.time_hhmm:
             hh, mm = row.time_hhmm.split(":", 1)
             trigger = CronTrigger(
                 hour=int(hh),
@@ -198,7 +255,7 @@ class BotScheduler:
         self.scheduler.add_job(
             _execute_schedule,
             trigger=trigger,
-            id=job_id,
+            id=base_id,
             kwargs={"schedule_id": row.id},
             replace_existing=True,
             max_instances=1,

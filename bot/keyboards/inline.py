@@ -85,7 +85,13 @@ def kb_schedule_kind() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("1️⃣ One-time", callback_data="sch:k:once")],
-            [InlineKeyboardButton("🔁 Daily", callback_data="sch:k:daily")],
+            [InlineKeyboardButton("🔁 Daily (one time of day)", callback_data="sch:k:daily")],
+            [
+                InlineKeyboardButton(
+                    "🇮🇳 Daily ×6 IST peaks",
+                    callback_data="sch:k:daily_peak",
+                )
+            ],
             [InlineKeyboardButton("📅 Weekly", callback_data="sch:k:weekly")],
             [InlineKeyboardButton("⏱️ Custom interval", callback_data="sch:k:interval")],
             [InlineKeyboardButton("⬅️ Cancel", callback_data="sch:cancel")],

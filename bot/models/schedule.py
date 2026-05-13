@@ -3,6 +3,13 @@ Scheduled posts: one-time, daily, weekly, or custom interval.
 
 `content_json` stores serialized message payload (text/media file_ids).
 `buttons_json` stores inline keyboard layout for resend.
+
+`daily_slot_times`: optional list of "HH:MM" strings (same `kind=daily`); one APScheduler job per slot.
+
+`content_pool_json`: optional list of message payloads; each run picks one at random (e.g. many
+prediction texts). Fill via SQL/API or a future UI — same shape as `message_to_content_dict` output.
+
+`jitter_seconds`: optional max random delay after the cron fires (capped in code).
 """
 
 from datetime import datetime
@@ -46,7 +53,14 @@ class Schedule(Base):
     # interval: seconds between runs
     interval_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # When set (e.g. 6 IST peak times), `kind` stays `daily` and one APScheduler job is created per slot.
+    daily_slot_times: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    # If non-empty, each run picks one entry at random (predictions / bulk). Otherwise uses `content_json`.
+    content_pool_json: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB, nullable=True)
+    # Max random delay in seconds after the cron fires (0 = none). Spreads load slightly.
+    jitter_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
 
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     buttons_json: Mapped[Optional[list[list[dict[str, str]]]]] = mapped_column(JSONB, nullable=True)

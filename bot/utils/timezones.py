@@ -50,3 +50,15 @@ def next_daily_at(hhmm: str, tz_name: str, *, after: datetime | None = None) -> 
     if candidate_local <= local_now:
         candidate_local += timedelta(days=1)
     return candidate_local.astimezone(ZoneInfo("UTC"))
+
+
+def next_daily_multi_slots_at(
+    times: list[str], tz_name: str, *, after: datetime | None = None
+) -> datetime:
+    """Earliest UTC moment among the next occurrence of each HH:MM in `times` (same calendar rules as `next_daily_at`)."""
+    if not times:
+        return next_daily_at("09:00", tz_name, after=after)
+    anchors = [next_daily_at(hm.strip(), tz_name, after=after) for hm in times if hm and ":" in hm]
+    if not anchors:
+        return next_daily_at("09:00", tz_name, after=after)
+    return min(anchors)

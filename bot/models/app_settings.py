@@ -25,7 +25,7 @@ class AppSettings(Base):
     # Optional linked discussion supergroup (legacy / manual use; welcome uses channel joins)
     discussion_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
     logs_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     updated_at: Mapped[datetime] = mapped_column(

@@ -883,23 +883,23 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if eid and existing:
             pause_saved = existing.paused
             for k in (
-                    "title",
-                    "kind",
-                    "timezone",
-                    "content_json",
-                    "buttons_json",
-                    "next_run_at",
-                    "schedule_summary",
-                    "time_hhmm",
-                    "weekday",
-                    "interval_seconds",
-                    "daily_slot_times",
-                    "content_pool_json",
-                    "jitter_seconds",
-                ):
-                    setattr(existing, k, getattr(row, k))
-                existing.paused = pause_saved
-                row = existing
+                "title",
+                "kind",
+                "timezone",
+                "content_json",
+                "buttons_json",
+                "next_run_at",
+                "schedule_summary",
+                "time_hhmm",
+                "weekday",
+                "interval_seconds",
+                "daily_slot_times",
+                "content_pool_json",
+                "jitter_seconds",
+            ):
+                setattr(existing, k, getattr(row, k))
+            existing.paused = pause_saved
+            row = existing
         else:
             session.add(row)
 

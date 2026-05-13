@@ -26,6 +26,7 @@ from bot.models.schedule import Schedule, ScheduleKind
 from bot.runtime import get_application
 from bot.services.channel_delivery_service import record_channel_delivery
 from bot.services.content_poster import send_content_to_chat
+from bot.services.prediction_engine_service import run_prediction_cycle
 from bot.services.settings_service import get_or_create_settings
 from bot.utils import timezones as tzutil
 
@@ -70,18 +71,36 @@ async def _execute_schedule(schedule_id: int) -> None:
                 cap = min(int(row.jitter_seconds), _MAX_JITTER_CAP_S)
                 await asyncio.sleep(random.randint(0, cap))
 
-            content = _pick_schedule_content(row)
+            if row.use_prediction_engine:
+                ok = await run_prediction_cycle(
+                    bot,
+                    session,
+                    schedule=row,
+                    channel_id=int(channel_id),
+                    buttons_json=row.buttons_json,
+                )
+                if not ok:
+                    await _fail(
+                        session,
+                        schedule_id,
+                        channel_id,
+                        "Prediction engine: no active sets or empty templates — add prediction_sets rows",
+                    )
+                    await session.commit()
+                    return
+            else:
+                content = _pick_schedule_content(row)
 
-            mid = await send_content_to_chat(
-                bot,
-                chat_id=channel_id,
-                content=content,
-                buttons_json=row.buttons_json,
-            )
-            if mid is None:
-                await _fail(session, schedule_id, channel_id, "Unsupported or empty content")
-                await session.commit()
-                return
+                mid = await send_content_to_chat(
+                    bot,
+                    chat_id=channel_id,
+                    content=content,
+                    buttons_json=row.buttons_json,
+                )
+                if mid is None:
+                    await _fail(session, schedule_id, channel_id, "Unsupported or empty content")
+                    await session.commit()
+                    return
 
             row.last_run_at = datetime.now(tz=timezone.utc)
 

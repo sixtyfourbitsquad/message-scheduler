@@ -5,6 +5,8 @@ from bot.models.broadcast_log import BroadcastLog
 from bot.models.channel_delivery_log import ChannelDeliveryLog
 from bot.models.channel_subscriber import ChannelSubscriber
 from bot.models.failed_delivery import FailedDelivery
+from bot.models.prediction_engine_state import PredictionEngineState
+from bot.models.prediction_set import PredictionSet
 from bot.models.schedule import Schedule
 from bot.models.welcome_config import WelcomeConfig
 
@@ -16,6 +18,8 @@ __all__ = [
     "ChannelDeliveryLog",
     "ChannelSubscriber",
     "FailedDelivery",
+    "PredictionEngineState",
+    "PredictionSet",
     "Schedule",
     "WelcomeConfig",
 ]

@@ -97,6 +97,29 @@ sudo journalctl -u channel-bot -f
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS daily_slot_times JSONB;
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS content_pool_json JSONB;
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS jitter_seconds INTEGER;
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS use_prediction_engine BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS prediction_options JSONB;
+```
+
+- Prediction engine tables are created on bot startup (`create_all`). On an existing database you can rely on the same startup step, or create manually:
+
+```sql
+CREATE TABLE IF NOT EXISTS prediction_sets (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(128) NOT NULL DEFAULT 'set',
+  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+  is_premium BOOLEAN NOT NULL DEFAULT false,
+  active BOOLEAN NOT NULL DEFAULT true,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  notes TEXT,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS prediction_engine_states (
+  schedule_id INTEGER PRIMARY KEY,
+  channel_id BIGINT NOT NULL,
+  state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
 ```
 
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.

@@ -20,7 +20,7 @@ def register_handlers(application: Application) -> None:
       on the target public channel (welcome DMs).
     """
     application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(m|bc|sch|lst|wel|cfg|btn):"))
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(m|bc|sch|lst|wel|cfg|btn|pred):"))
     application.add_handler(ChatMemberHandler(on_chat_member))
     application.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, on_private_message),

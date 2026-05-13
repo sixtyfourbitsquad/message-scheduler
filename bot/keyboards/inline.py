@@ -20,6 +20,9 @@ def kb_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚙️ Settings", callback_data="m:cfg"),
             InlineKeyboardButton("📊 Statistics", callback_data="m:st"),
         ],
+        [
+            InlineKeyboardButton("🎲 Prediction engine", callback_data="m:pred"),
+        ],
     ]
     return InlineKeyboardMarkup(rows)
 

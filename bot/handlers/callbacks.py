@@ -26,6 +26,8 @@ from bot.keyboards.inline import (
     kb_welcome_menu,
 )
 from bot.models.broadcast_log import BroadcastLog
+from bot.models.prediction_engine_state import PredictionEngineState
+from bot.models.prediction_set import PredictionSet
 from bot.models.schedule import Schedule, ScheduleKind
 from bot.scheduler.manager import BotScheduler
 from bot.services.broadcast_fanout_service import fanout_dm_to_subscribers
@@ -134,6 +136,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "m:st":
         await _render_stats(update, context)
+        return
+
+    if data in ("m:pred", "pred:info"):
+        await _render_prediction_engine_info(update, context)
         return
 
     # ---- Broadcast wizard ----
@@ -867,11 +873,16 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             row.schedule_summary = f"Every {row.interval_seconds}s"
 
         eid = d.get("editing_schedule_id")
+        existing = None
         if eid:
             existing = await session.get(Schedule, int(eid))
-            if existing:
-                pause_saved = existing.paused
-                for k in (
+        if existing:
+            row.use_prediction_engine = bool(existing.use_prediction_engine)
+            row.prediction_options = existing.prediction_options
+
+        if eid and existing:
+            pause_saved = existing.paused
+            for k in (
                     "title",
                     "kind",
                     "timezone",
@@ -948,6 +959,9 @@ async def _render_schedule_detail(update: Update, context: ContextTypes.DEFAULT_
             txt += f"Content pool entries: <code>{len(r.content_pool_json)}</code> (random each run)\n"
         if r.jitter_seconds:
             txt += f"Jitter (max delay after trigger): <code>{r.jitter_seconds}</code>s\n"
+        txt += f"Prediction engine: <code>{r.use_prediction_engine}</code>\n"
+        if r.prediction_options:
+            txt += f"Prediction options: <code>{esc(str(r.prediction_options))}</code>\n"
     await edit_or_send(update, context, text=txt, reply_markup=kb_posts_row(sid))
 
 
@@ -969,6 +983,7 @@ async def _pause_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, si
 async def _delete_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, sid: int) -> None:
     factory = get_session_factory()
     async with factory() as session:
+        await session.execute(delete(PredictionEngineState).where(PredictionEngineState.schedule_id == sid))
         await session.execute(delete(Schedule).where(Schedule.id == sid))
         await session.commit()
     mgr = BotScheduler.instance()
@@ -1049,6 +1064,49 @@ async def _render_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"Logs: <code>{s.logs_enabled}</code>\n"
         )
     await edit_or_send(update, context, text=txt, reply_markup=kb_settings_menu())
+
+
+async def _render_prediction_engine_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        res = await session.execute(select(PredictionSet).where(PredictionSet.active.is_(True)))
+        n_active = len(list(res.scalars().all()))
+        res_all = await session.execute(select(PredictionSet))
+        n_total = len(list(res_all.scalars().all()))
+    txt = (
+        "<b>Prediction engine</b>\n\n"
+        "When a schedule has <code>use_prediction_engine = true</code>, each run picks a weighted "
+        "row from <code>prediction_sets</code>, sends one template message, pauses, then sends a WIN/LOSS "
+        "sticker or a result image (with optional caption). Per-schedule state avoids repeating the same "
+        "stickers, captions, templates, and recent outcome sequences.\n\n"
+        f"<b>Sets in database:</b> <code>{n_total}</code> total · <code>{n_active}</code> active\n\n"
+        "<b>Payload shape</b> (column <code>prediction_sets.payload</code> JSONB):\n"
+        "<code>templates</code>, <code>win_stickers</code>, <code>loss_stickers</code>, "
+        "<code>result_images</code>, <code>captions</code> — values must be Telegram "
+        "<code>file_id</code> strings and the same content dict shapes the scheduler already uses.\n\n"
+        "<b>Higher sticker odds:</b> repeat the same <code>file_id</code> more times in the array. "
+        "<b>Premium sets:</b> set <code>is_premium = true</code> so they roll less often.\n\n"
+        "<b>Enable on a schedule</b> (run in <code>psql</code>; adjust id and JSON):\n"
+        "<pre>UPDATE schedules\n"
+        "SET use_prediction_engine = true,\n"
+        "    prediction_options = '{\"typing\":true,\"typing_before_media\":true,\"inter_message_delay_max\":5}'::jsonb\n"
+        "WHERE id = 1;</pre>\n\n"
+        "<i>Optional local folders</i> <code>assets/win_stickers</code>, <code>assets/result_images</code>, "
+        "etc. are only for your files; the bot reads pools from the database."
+    )
+    await edit_or_send(
+        update,
+        context,
+        text=txt,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("🔁 Refresh", callback_data="pred:info"),
+                    InlineKeyboardButton("⬅️ Back", callback_data="m:home"),
+                ]
+            ]
+        ),
+    )
 
 
 async def _render_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -10,6 +10,8 @@ from telegram.ext import Application
 from bot.config.settings import settings
 from bot.database import Base
 from bot.database.session import dispose_engine, get_engine, init_engine
+
+import bot.models  # noqa: F401 — register all ORM tables on Base.metadata before create_all
 from bot.handlers.register import register_handlers
 from bot.runtime import set_application
 from bot.scheduler.manager import BotScheduler

@@ -62,6 +62,11 @@ class Schedule(Base):
 
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
 
+    # When true, scheduled run uses `prediction_sets` + anti-repeat state instead of content_pool.
+    use_prediction_engine: Mapped[bool] = mapped_column(Boolean, default=False)
+    # e.g. {"typing": true, "inter_message_delay_max": 4, "typing_before_media": true}
+    prediction_options: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     buttons_json: Mapped[Optional[list[list[dict[str, str]]]]] = mapped_column(JSONB, nullable=True)
 

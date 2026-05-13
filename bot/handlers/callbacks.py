@@ -27,7 +27,6 @@ from bot.keyboards.inline import (
 )
 from bot.models.broadcast_log import BroadcastLog
 from bot.models.prediction_engine_state import PredictionEngineState
-from bot.models.prediction_set import PredictionSet
 from bot.models.schedule import Schedule, ScheduleKind
 from bot.scheduler.manager import BotScheduler
 from bot.services.broadcast_fanout_service import fanout_dm_to_subscribers
@@ -138,8 +137,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _render_stats(update, context)
         return
 
-    if data in ("m:pred", "pred:info"):
-        await _render_prediction_engine_info(update, context)
+    if data == "m:pred":
+        from bot.handlers.prediction_admin import render_pred_hub
+
+        await render_pred_hub(update, context)
+        return
+
+    if data.startswith("pred:"):
+        from bot.handlers.prediction_admin import dispatch_pred_callback
+
+        await dispatch_pred_callback(update, context, data)
         return
 
     # ---- Broadcast wizard ----
@@ -1064,49 +1071,6 @@ async def _render_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"Logs: <code>{s.logs_enabled}</code>\n"
         )
     await edit_or_send(update, context, text=txt, reply_markup=kb_settings_menu())
-
-
-async def _render_prediction_engine_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    factory = get_session_factory()
-    async with factory() as session:
-        res = await session.execute(select(PredictionSet).where(PredictionSet.active.is_(True)))
-        n_active = len(list(res.scalars().all()))
-        res_all = await session.execute(select(PredictionSet))
-        n_total = len(list(res_all.scalars().all()))
-    txt = (
-        "<b>Prediction engine</b>\n\n"
-        "When a schedule has <code>use_prediction_engine = true</code>, each run picks a weighted "
-        "row from <code>prediction_sets</code>, sends one template message, pauses, then sends a WIN/LOSS "
-        "sticker or a result image (with optional caption). Per-schedule state avoids repeating the same "
-        "stickers, captions, templates, and recent outcome sequences.\n\n"
-        f"<b>Sets in database:</b> <code>{n_total}</code> total · <code>{n_active}</code> active\n\n"
-        "<b>Payload shape</b> (column <code>prediction_sets.payload</code> JSONB):\n"
-        "<code>templates</code>, <code>win_stickers</code>, <code>loss_stickers</code>, "
-        "<code>result_images</code>, <code>captions</code> — values must be Telegram "
-        "<code>file_id</code> strings and the same content dict shapes the scheduler already uses.\n\n"
-        "<b>Higher sticker odds:</b> repeat the same <code>file_id</code> more times in the array. "
-        "<b>Premium sets:</b> set <code>is_premium = true</code> so they roll less often.\n\n"
-        "<b>Enable on a schedule</b> (run in <code>psql</code>; adjust id and JSON):\n"
-        "<pre>UPDATE schedules\n"
-        "SET use_prediction_engine = true,\n"
-        "    prediction_options = '{\"typing\":true,\"typing_before_media\":true,\"inter_message_delay_max\":5}'::jsonb\n"
-        "WHERE id = 1;</pre>\n\n"
-        "<i>Optional local folders</i> <code>assets/win_stickers</code>, <code>assets/result_images</code>, "
-        "etc. are only for your files; the bot reads pools from the database."
-    )
-    await edit_or_send(
-        update,
-        context,
-        text=txt,
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("🔁 Refresh", callback_data="pred:info"),
-                    InlineKeyboardButton("⬅️ Back", callback_data="m:home"),
-                ]
-            ]
-        ),
-    )
 
 
 async def _render_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

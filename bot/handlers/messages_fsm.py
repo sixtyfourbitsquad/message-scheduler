@@ -101,6 +101,12 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ud = context.user_data
     st = get_state(ud)
 
+    from bot.handlers.prediction_admin import ST_PRED_MEDIA, ST_PRED_STICK, ST_PRED_TEXT, handle_prediction_admin_message
+
+    if st in (ST_PRED_TEXT, ST_PRED_MEDIA, ST_PRED_STICK):
+        if await handle_prediction_admin_message(update, context):
+            return
+
     if st in {ST_BC_BUTTON_URL, ST_SCH_BUTTON_URL, ST_WEL_BTN_URL}:
         await _capture_button_url(update, context)
         return

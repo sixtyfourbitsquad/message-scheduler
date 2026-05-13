@@ -1,9 +1,9 @@
 """
 Dynamic prediction cycles: weighted sets, anti-repeat memory, typing simulation.
 
-Telegram only accepts uploaded `file_id` values in production — use `payload` JSON in
-`prediction_sets` (populate via SQL or tooling). Optional local folders under `assets/`
-are for your own organization before you copy file_ids into the DB.
+`prediction_sets` rows are normally created in the Telegram admin panel (optional SQL still works).
+Telegram only accepts real `file_id` values in JSONB payloads. Optional `assets/` folders are for your
+own file organization before you upload through the bot.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from telegram import Bot
 from telegram.constants import ChatAction
 
 from bot.models.prediction_engine_state import PredictionEngineState
+from bot.models.prediction_run_log import PredictionRunLog
 from bot.models.prediction_set import PredictionSet
 from bot.models.schedule import Schedule
 from bot.services.content_poster import send_content_to_chat
@@ -86,6 +87,29 @@ async def _chat_action(bot: Bot, chat_id: int, *, typing: bool, media: bool) -> 
     await asyncio.sleep(random.uniform(0.35, 1.65))
 
 
+async def _append_run_log(
+    session: AsyncSession,
+    *,
+    schedule_id: int,
+    set_id: int | None,
+    outcome: str | None,
+    ok: bool,
+    detail: str | None = None,
+    manual_test: bool = False,
+) -> None:
+    session.add(
+        PredictionRunLog(
+            schedule_id=int(schedule_id),
+            set_id=set_id,
+            outcome=outcome,
+            ok=ok,
+            detail=detail,
+            manual_test=manual_test,
+        )
+    )
+    await session.flush()
+
+
 async def run_prediction_cycle(
     bot: Bot,
     session: AsyncSession,
@@ -93,6 +117,7 @@ async def run_prediction_cycle(
     schedule: Schedule,
     channel_id: int,
     buttons_json: list[list[dict[str, str]]] | None,
+    manual_test: bool = False,
 ) -> bool:
     """
     Send a short organic-looking sequence: prediction text → pause → result (sticker or media).
@@ -105,6 +130,16 @@ async def run_prediction_cycle(
     sets = list(res.scalars().all())
     if not sets:
         log.warning("use_prediction_engine on schedule %s but no active prediction_sets", schedule.id)
+        if manual_test:
+            await _append_run_log(
+                session,
+                schedule_id=int(schedule.id),
+                set_id=None,
+                outcome=None,
+                ok=False,
+                detail="no_active_sets",
+                manual_test=True,
+            )
         return False
 
     st = await session.get(PredictionEngineState, int(schedule.id))
@@ -146,6 +181,16 @@ async def run_prediction_cycle(
     ]
     if not templates:
         log.warning("prediction set %s has no valid templates", chosen.id)
+        if manual_test:
+            await _append_run_log(
+                session,
+                schedule_id=int(schedule.id),
+                set_id=int(chosen.id),
+                outcome=None,
+                ok=False,
+                detail="no_templates",
+                manual_test=True,
+            )
         return False
 
     tmpl_keys: list[str] = []
@@ -181,14 +226,40 @@ async def run_prediction_cycle(
         x for x in (payload.get("result_images") or []) if isinstance(x, dict) and x.get("type") and x.get("file_id")
     ]
     captions = [x for x in (payload.get("captions") or []) if isinstance(x, str) and x.strip()]
+    registers = [x.strip() for x in (payload.get("registers") or []) if isinstance(x, str) and x.strip()]
+    warnings_pool = [x.strip() for x in (payload.get("warnings") or []) if isinstance(x, str) and x.strip()]
+    reg_p = max(0.0, min(1.0, float(opts.get("register_probability", 0.18) or 0.0)))
+    war_p = max(0.0, min(1.0, float(opts.get("warning_probability", 0.26) or 0.0)))
+
+    if registers and random.random() < reg_p:
+        try:
+            await bot.send_message(chat_id=channel_id, text=random.choice(registers))
+            await asyncio.sleep(random.uniform(0.35, 1.1))
+        except Exception as e:
+            log.info("register line send skipped: %s", e)
 
     await _chat_action(bot, channel_id, typing=typing_sim, media=False)
     mid = await send_content_to_chat(bot, chat_id=channel_id, content=tmpl, buttons_json=buttons_json)
     if not mid:
+        await _append_run_log(
+            session,
+            schedule_id=int(schedule.id),
+            set_id=int(chosen.id),
+            outcome=outcome,
+            ok=False,
+            detail="template_send_failed",
+            manual_test=manual_test,
+        )
         return False
 
-    await asyncio.sleep(random.uniform(inter_min, inter_max))
+    if warnings_pool and random.random() < war_p:
+        try:
+            await bot.send_message(chat_id=channel_id, text=random.choice(warnings_pool))
+            await asyncio.sleep(random.uniform(0.25, 0.85))
+        except Exception:
+            pass
 
+    await asyncio.sleep(random.uniform(inter_min, inter_max))
     recent_stickers = list(state.get("recent_sticker_ids") or [])
     recent_caps = list(state.get("recent_caption_sigs") or [])
 
@@ -237,6 +308,13 @@ async def run_prediction_cycle(
     seq.append(sig)
     seq = seq[-_SEQ_RING:]
 
+    wt = int(state.get("win_total") or 0)
+    lt = int(state.get("loss_total") or 0)
+    if outcome == "W":
+        wt += 1
+    else:
+        lt += 1
+
     state.update(
         {
             "recent_set_ids": recent_set_ids,
@@ -245,8 +323,22 @@ async def run_prediction_cycle(
             "recent_caption_sigs": recent_caps,
             "recent_outcomes": outcomes,
             "recent_sequences": seq,
+            "last_set_id": int(chosen.id),
+            "win_total": wt,
+            "loss_total": lt,
         }
     )
     st.state_json = state
     await session.flush()
+
+    detail = None if sent_second else "no_result_attachment"
+    await _append_run_log(
+        session,
+        schedule_id=int(schedule.id),
+        set_id=int(chosen.id),
+        outcome=outcome,
+        ok=True,
+        detail=detail,
+        manual_test=manual_test,
+    )
     return True

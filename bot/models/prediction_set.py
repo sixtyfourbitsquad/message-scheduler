@@ -21,11 +21,12 @@ class PredictionSet(Base):
       "win_stickers": [ "file_id", ... ],
       "loss_stickers": [ "file_id", ... ],
       "result_images": [ { "type":"photo", "file_id":"...", "caption":"..." }, ... ],
-      "captions": [ "plain caption strings", ... ]
+      "captions": [ "plain caption strings", ... ],
+      "warnings": [ "optional short lines after the signal", ... ],
+      "registers": [ "optional session register lines before the signal", ... ]
     }
 
-    Upload stickers/images once in private with the bot, capture `file_id` from logs or
-    forward-capture tooling, then paste into JSON / SQL.
+    Pools are editable from the Telegram Prediction engine admin panel (no SQL required).
     """
 
     __tablename__ = "prediction_sets"

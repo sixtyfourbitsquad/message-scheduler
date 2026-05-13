@@ -120,6 +120,18 @@ CREATE TABLE IF NOT EXISTS prediction_engine_states (
   state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS prediction_run_logs (
+  id SERIAL PRIMARY KEY,
+  schedule_id INTEGER NOT NULL,
+  set_id INTEGER,
+  outcome VARCHAR(8),
+  manual_test BOOLEAN NOT NULL DEFAULT false,
+  ok BOOLEAN NOT NULL DEFAULT true,
+  detail TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_prediction_run_logs_schedule_id ON prediction_run_logs (schedule_id);
+CREATE INDEX IF NOT EXISTS ix_prediction_run_logs_set_id ON prediction_run_logs (set_id);
 ```
 
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.

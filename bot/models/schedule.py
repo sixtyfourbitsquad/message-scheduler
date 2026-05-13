@@ -64,7 +64,7 @@ class Schedule(Base):
 
     # When true, scheduled run uses `prediction_sets` + anti-repeat state instead of content_pool.
     use_prediction_engine: Mapped[bool] = mapped_column(Boolean, default=False)
-    # e.g. {"typing": true, "inter_message_delay_max": 4, "typing_before_media": true}
+    # typing, typing_before_media, inter_message_delay_min/max, register_probability, warning_probability
     prediction_options: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

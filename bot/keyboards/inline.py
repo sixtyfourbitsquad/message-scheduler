@@ -17,6 +17,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚙️ Settings", callback_data="m:cfg"),
         ],
         [
+            InlineKeyboardButton("💬 /start message", callback_data="m:sr"),
             InlineKeyboardButton("📊 Statistics", callback_data="m:st"),
         ],
     ]
@@ -67,6 +68,28 @@ def kb_broadcast_preview() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⏰ Schedule", callback_data="bc:queue_sch"),
                 InlineKeyboardButton("❌ Cancel", callback_data="bc:cancel"),
             ],
+        ]
+    )
+
+
+def kb_start_reply_hub() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✏️ Edit message & buttons", callback_data="sr:start")],
+            [InlineKeyboardButton("🔛 Toggle enabled", callback_data="sr:toggle")],
+            [InlineKeyboardButton("📩 Test saved message", callback_data="sr:test")],
+            [InlineKeyboardButton("🧹 Clear & disable", callback_data="sr:clear")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="m:home")],
+        ]
+    )
+
+
+def kb_start_reply_preview() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("💾 Save & enable", callback_data="sr:save")],
+            [InlineKeyboardButton("📩 Test draft", callback_data="sr:test")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sr:cancel")],
         ]
     )
 

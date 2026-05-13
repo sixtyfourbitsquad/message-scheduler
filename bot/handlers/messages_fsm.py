@@ -31,6 +31,9 @@ from bot.utils.fsm import (
     ST_SET_CHANNEL,
     ST_SET_DISCUSSION,
     ST_SET_TZ,
+    ST_SR_BUTTON_TEXT,
+    ST_SR_BUTTON_URL,
+    ST_SR_WAIT_CONTENT,
     ST_SCH_BUTTON_TEXT,
     ST_SCH_BUTTON_URL,
     ST_SCH_INTERVAL,
@@ -95,7 +98,7 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ud = context.user_data
     st = get_state(ud)
 
-    if st in {ST_BC_BUTTON_URL, ST_SCH_BUTTON_URL}:
+    if st in {ST_BC_BUTTON_URL, ST_SCH_BUTTON_URL, ST_SR_BUTTON_URL}:
         await _capture_button_url(update, context)
         return
 
@@ -107,6 +110,23 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     if st == ST_SET_TZ:
         await _capture_tz(update, context)
+        return
+
+    if st == ST_SR_WAIT_CONTENT:
+        payload = message_to_content_dict(msg)
+        if payload.get("type") == "unsupported":
+            await msg.reply_text(payload.get("hint", "Unsupported message."))
+            return
+        get_data(ud)["content"] = payload
+        from bot.utils.fsm import ST_SR_BUTTONS_ASK
+
+        set_state(ud, ST_SR_BUTTONS_ASK)
+        await _edit_panel(
+            context,
+            ud,
+            text="<b>/start message — step 2</b>\n\nAdd inline URL buttons under the message?",
+            reply_markup=kb_yes_no_skip(yes_data="sr:btny", no_data="sr:btnn", cancel_data="sr:cancel"),
+        )
         return
 
     if st == ST_BC_WAIT_CONTENT:
@@ -124,6 +144,16 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text="<b>STEP 2/4 — Inline buttons</b>\n\nDo you want URL buttons under the post?",
             reply_markup=kb_yes_no_skip(yes_data="bc:btny", no_data="bc:btnn", cancel_data="bc:cancel"),
         )
+        return
+
+    if st == ST_SR_BUTTON_TEXT:
+        label = (msg.text or "").strip()
+        if not label:
+            await msg.reply_text("Please send non-empty button text.")
+            return
+        get_data(ud)["pending_btn_text"] = label
+        set_state(ud, ST_SR_BUTTON_URL)
+        await msg.reply_text("Now send the button URL (must start with http/https).")
         return
 
     if st == ST_BC_BUTTON_TEXT:
@@ -215,6 +245,8 @@ async def _capture_button_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         set_state(ud, ST_BC_BUTTON_TEXT)
     elif st == ST_SCH_BUTTON_URL:
         set_state(ud, ST_SCH_BUTTON_TEXT)
+    elif st == ST_SR_BUTTON_URL:
+        set_state(ud, ST_SR_BUTTON_TEXT)
 
     await msg.reply_text("Button added. Send another label, or press Done.", reply_markup=kb_button_builder_controls())
 

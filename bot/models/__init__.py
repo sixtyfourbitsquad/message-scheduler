@@ -6,6 +6,7 @@ from bot.models.channel_delivery_log import ChannelDeliveryLog
 from bot.models.channel_subscriber import ChannelSubscriber
 from bot.models.failed_delivery import FailedDelivery
 from bot.models.schedule import Schedule
+from bot.models.start_reply_config import StartReplyConfig
 
 __all__ = [
     "Admin",
@@ -16,4 +17,5 @@ __all__ = [
     "ChannelSubscriber",
     "FailedDelivery",
     "Schedule",
+    "StartReplyConfig",
 ]

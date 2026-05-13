@@ -21,6 +21,8 @@ from bot.keyboards.inline import (
     kb_schedule_preview,
     kb_scheduler_entry,
     kb_settings_menu,
+    kb_start_reply_hub,
+    kb_start_reply_preview,
     kb_stats_refresh,
 )
 from bot.models.broadcast_log import BroadcastLog
@@ -31,6 +33,7 @@ from bot.services.channel_delivery_service import record_channel_delivery
 from bot.services.channel_subscriber_service import list_active_subscriber_ids
 from bot.services.content_poster import send_content_to_chat
 from bot.services.settings_service import get_or_create_settings
+from bot.services.start_reply_service import effective_start_payload, get_or_create_start_reply
 from bot.services.stats_service import stats_snapshot
 from bot.utils import timezones as tzutil
 from bot.utils.fsm import (
@@ -47,6 +50,10 @@ from bot.utils.fsm import (
     ST_SCH_KIND,
     ST_SCH_PREVIEW,
     ST_SCH_TIME,
+    ST_SR_BUTTON_TEXT,
+    ST_SR_BUTTON_URL,
+    ST_SR_PREVIEW,
+    ST_SR_WAIT_CONTENT,
     ST_SCH_WAIT_CONTENT,
     ST_SCH_WEEKDAY,
     get_data,
@@ -123,6 +130,130 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "m:st":
         await _render_stats(update, context)
+        return
+
+    if data == "m:sr":
+        reset_fsm(context.user_data)
+        await _render_start_reply_hub(update, context)
+        return
+
+    # ---- /start message (admin) ----
+    if data == "sr:start":
+        reset_fsm(context.user_data)
+        get_data(context.user_data).clear()
+        get_data(context.user_data)["btn_ctx"] = "sr"
+        set_state(context.user_data, ST_SR_WAIT_CONTENT)
+        m = await edit_or_send(
+            update,
+            context,
+            text=(
+                "<b>/start message — step 1</b>\n\n"
+                "Send <b>one</b> message (text, photo, video, etc.). "
+                "This is what non-admins see when they tap /start — with optional URL buttons next.\n\n"
+                "<i>Admins see this too, then the control panel.</i>"
+            ),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sr:cancel")]]),
+        )
+        _remember_panel_message(m, context.user_data)
+        return
+
+    if data == "sr:cancel":
+        reset_fsm(context.user_data)
+        await _render_start_reply_hub(update, context)
+        return
+
+    if data == "sr:toggle":
+        factory = get_session_factory()
+        async with factory() as session:
+            row = await get_or_create_start_reply(session)
+            row.enabled = not bool(row.enabled)
+            await session.commit()
+        await _render_start_reply_hub(update, context)
+        return
+
+    if data == "sr:clear":
+        factory = get_session_factory()
+        async with factory() as session:
+            row = await get_or_create_start_reply(session)
+            row.enabled = False
+            row.content_json = {}
+            row.buttons_json = None
+            await session.commit()
+        await _render_start_reply_hub(update, context)
+        return
+
+    if data == "sr:save":
+        await _start_reply_save(update, context)
+        return
+
+    if data == "sr:test":
+        uid = update.effective_user.id if update.effective_user else None
+        if not uid:
+            return
+        st = get_state(context.user_data)
+        if st == ST_SR_PREVIEW:
+            d = get_data(context.user_data)
+            content = d.get("content") or {}
+            buttons = d.get("buttons")
+            try:
+                mid = await send_content_to_chat(
+                    context.bot, chat_id=int(uid), content=content, buttons_json=buttons
+                )
+                txt = (
+                    "✅ Sent a draft copy to you."
+                    if mid
+                    else "❌ Could not send (unsupported or empty content?)."
+                )
+            except Exception as e:
+                txt = f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>"
+            await edit_or_send(update, context, text=txt, reply_markup=kb_start_reply_preview())
+            return
+        factory = get_session_factory()
+        async with factory() as session:
+            row = await get_or_create_start_reply(session)
+            await session.commit()
+        payload = effective_start_payload(row)
+        if not payload:
+            await edit_or_send(
+                update,
+                context,
+                text="❌ Nothing saved yet, or message is disabled / empty. Edit and <b>Save & enable</b> first.",
+                reply_markup=kb_start_reply_hub(),
+            )
+            return
+        content, buttons = payload
+        try:
+            mid = await send_content_to_chat(
+                context.bot, chat_id=int(uid), content=content, buttons_json=buttons
+            )
+            txt = (
+                "✅ Sent your saved /start message to you."
+                if mid
+                else "❌ Could not send (unsupported content?). Re-save the message."
+            )
+        except Exception as e:
+            txt = f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>"
+        await edit_or_send(update, context, text=txt, reply_markup=kb_start_reply_hub())
+        return
+
+    if data == "sr:btny":
+        set_state(context.user_data, ST_SR_BUTTON_TEXT)
+        d = get_data(context.user_data)
+        d["btn_ctx"] = "sr"
+        d["buttons"] = []
+        d["btn_newrow"] = True
+        await edit_or_send(
+            update,
+            context,
+            text="<b>/start message — buttons</b>\n\nSend the <b>button label</b> (plain text).",
+            reply_markup=kb_button_builder_controls(),
+        )
+        return
+
+    if data == "sr:btnn":
+        get_data(context.user_data)["buttons"] = None
+        set_state(context.user_data, ST_SR_PREVIEW)
+        await _render_sr_preview(update, context)
         return
 
     # ---- Broadcast wizard ----
@@ -300,11 +431,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             _remember_panel_message(m, context.user_data)
             return
+        if ctx == "sr" and st in {ST_SR_BUTTON_TEXT, ST_SR_BUTTON_URL}:
+            set_state(context.user_data, ST_SR_PREVIEW)
+            await _render_sr_preview(update, context)
+            return
         return
 
     if data == "btn:cancel":
+        ctx = get_data(context.user_data).get("btn_ctx")
         reset_fsm(context.user_data)
-        await edit_or_send(update, context, text=DASHBOARD_HTML, reply_markup=kb_main_menu())
+        if ctx == "sr":
+            await _render_start_reply_hub(update, context)
+        else:
+            await edit_or_send(update, context, text=DASHBOARD_HTML, reply_markup=kb_main_menu())
         return
 
     # ---- Scheduled posts list actions ----
@@ -845,6 +984,63 @@ async def _begin_schedule_edit(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=kb_schedule_kind(),
         )
         _remember_panel_message(m, context.user_data)
+
+
+async def _render_start_reply_hub(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    banner: str | None = None,
+) -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await get_or_create_start_reply(session)
+        await session.commit()
+    prefix = f"<b>{esc(banner)}</b>\n\n" if banner else ""
+    nbtn = sum(len(r) for r in (row.buttons_json or []))
+    ctype = (row.content_json or {}).get("type")
+    txt = (
+        prefix
+        + "<b>💬 /start message</b>\n\n"
+        + "Everyone who opens the bot with <code>/start</code> sees this first when enabled "
+        + "(with your URL buttons). Admins then get the control panel.\n\n"
+        + f"Enabled: <code>{row.enabled}</code>\n"
+        + f"Content type: <code>{esc(str(ctype or 'none'))}</code>\n"
+        + f"URL buttons: <code>{nbtn}</code>\n"
+    )
+    await edit_or_send(update, context, text=txt, reply_markup=kb_start_reply_hub())
+
+
+async def _render_sr_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    d = get_data(context.user_data)
+    content = d.get("content") or {}
+    ctype = content.get("type", "?")
+    preview = (
+        "<b>/start message — preview</b>\n\n"
+        f"Type: <code>{esc(str(ctype))}</code>\n"
+        "<i>Save enables this for everyone. Test draft sends only to you.</i>\n"
+    )
+    if content.get("type") == "text":
+        preview += f"\n{esc(content.get('text','')[:3500])}"
+    elif content.get("caption"):
+        preview += f"\nCaption:\n{esc(content.get('caption','')[:3500])}"
+    set_state(context.user_data, ST_SR_PREVIEW)
+    await edit_or_send(update, context, text=preview, reply_markup=kb_start_reply_preview())
+
+
+async def _start_reply_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    d = get_data(context.user_data)
+    content = d.get("content") or {}
+    buttons = d.get("buttons")
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await get_or_create_start_reply(session)
+        row.content_json = content
+        row.buttons_json = buttons
+        row.enabled = True
+        await session.commit()
+    reset_fsm(context.user_data)
+    await _render_start_reply_hub(update, context, banner="✅ Saved and enabled.")
 
 
 async def _render_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

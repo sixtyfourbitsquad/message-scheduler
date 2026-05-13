@@ -14,6 +14,13 @@ ST_BC_BUTTON_TEXT = "bc_btn_text"
 ST_BC_BUTTON_URL = "bc_btn_url"
 ST_BC_PREVIEW = "bc_preview"
 
+# /start reply wizard (admin)
+ST_SR_WAIT_CONTENT = "sr_content"
+ST_SR_BUTTONS_ASK = "sr_buttons_ask"
+ST_SR_BUTTON_TEXT = "sr_btn_text"
+ST_SR_BUTTON_URL = "sr_btn_url"
+ST_SR_PREVIEW = "sr_preview"
+
 # Scheduler flow
 ST_SCH_WAIT_CONTENT = "sch_content"
 ST_SCH_BUTTONS_ASK = "sch_buttons_ask"

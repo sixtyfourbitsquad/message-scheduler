@@ -90,7 +90,7 @@ sudo journalctl -u channel-bot -f
 
 ### 7) Operational notes
 
-- New deploys create tables `bot_users`, `channel_delivery_logs`, and `channel_subscribers` automatically (`create_all`). Existing DBs get them on next bot restart the same way.
+- New deploys create tables `bot_users`, `channel_delivery_logs`, `channel_subscribers`, and `start_reply_config` automatically (`create_all`). Existing DBs get them on next bot restart the same way.
 - If the `schedules` table existed before multi-slot / pool columns, run once on Postgres:
 
 ```sql

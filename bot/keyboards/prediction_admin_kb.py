@@ -53,6 +53,7 @@ def pred_set_detail_kb(sid: int, active: bool, premium: bool) -> InlineKeyboardM
                 InlineKeyboardButton("➕ Register line", callback_data=f"pred:rg:{sid}"),
             ],
             [InlineKeyboardButton("➕ Warning line", callback_data=f"pred:wr:{sid}")],
+            [InlineKeyboardButton("👁 Preview (DM)", callback_data=f"pred:pv:{sid}")],
             [InlineKeyboardButton("🗑️ Delete set", callback_data=f"pred:dl:{sid}")],
             [InlineKeyboardButton("⬅️ Sets list", callback_data="pred:sets"), InlineKeyboardButton("🏠 Hub", callback_data="pred:hub")],
         ]

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import and_, delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from bot.database.session import get_session_factory
@@ -27,6 +30,7 @@ from bot.models.prediction_run_log import PredictionRunLog
 from bot.models.prediction_set import PredictionSet
 from bot.models.schedule import Schedule
 from bot.scheduler.manager import BotScheduler
+from bot.services.content_poster import send_content_to_chat
 from bot.services.prediction_engine_service import run_prediction_cycle
 from bot.services.settings_service import get_or_create_settings
 from bot.utils.fsm import get_data, get_state, reset_fsm, set_state
@@ -58,6 +62,11 @@ def _empty_payload() -> dict[str, Any]:
     }
 
 
+def _payload_deep(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Deep copy for safe JSONB mutations (SQLAlchemy detects reassignment)."""
+    return deepcopy(_norm_payload(raw))
+
+
 def _norm_payload(raw: dict[str, Any] | None) -> dict[str, Any]:
     p = dict(raw or {})
     for k, default in _empty_payload().items():
@@ -77,6 +86,69 @@ def _norm_payload(raw: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(p["warnings"], list):
         p["warnings"] = []
     return p
+
+
+def _compose_set_detail_view(r: PredictionSet) -> tuple[str, InlineKeyboardMarkup]:
+    sid = int(r.id)
+    p = _norm_payload(r.payload)
+    name, active, premium, weight = r.name, r.active, r.is_premium, r.weight
+    extra: list[list[InlineKeyboardButton]] = []
+    for cat, label, nkey, mx in (
+        ("win", "WIN", "win_stickers", 4),
+        ("los", "LOSS", "loss_stickers", 4),
+        ("tpl", "Tpl", "templates", 3),
+        ("img", "Res", "result_images", 3),
+        ("cap", "Cap", "captions", 4),
+        ("reg", "Reg", "registers", 3),
+        ("war", "War", "warnings", 3),
+    ):
+        arr = p.get(nkey) or []
+        for i, _it in enumerate(arr[:mx]):
+            extra.append(
+                [
+                    InlineKeyboardButton(
+                        f"🗑️ {label} {i}",
+                        callback_data=f"pred:rm:{sid}:{cat}:{i}",
+                    )
+                ]
+            )
+
+    txt = (
+        f"<b>Set #{sid}</b> — {esc(name)}\n"
+        f"Weight: <code>{weight}</code> · Premium: <code>{premium}</code> · Active: <code>{active}</code>\n\n"
+        f"Templates: <code>{len(p['templates'])}</code>\n"
+        f"WIN stickers: <code>{len(p['win_stickers'])}</code> · LOSS: <code>{len(p['loss_stickers'])}</code>\n"
+        f"Result media: <code>{len(p['result_images'])}</code>\n"
+        f"Captions: <code>{len(p['captions'])}</code> · Register lines: <code>{len(p['registers'])}</code> · Warnings: <code>{len(p['warnings'])}</code>"
+    )
+    markup = pred_set_detail_kb(sid, active, premium)
+    base = list(markup.inline_keyboard)
+    rows = base[:-2] + extra + base[-2:]
+    return txt, InlineKeyboardMarkup(rows)
+
+
+async def _refresh_set_detail_panel(context: ContextTypes.DEFAULT_TYPE, user_data: dict, sid: int) -> None:
+    """Re-edit the dashboard panel message so counts stay in sync after uploads."""
+    chat_id = user_data.get("panel_chat_id")
+    mid = user_data.get("panel_message_id")
+    if not chat_id or not mid:
+        return
+    factory = get_session_factory()
+    async with factory() as session:
+        r = await session.get(PredictionSet, sid)
+        if not r:
+            return
+        txt, kb = _compose_set_detail_view(r)
+    try:
+        await context.bot.edit_message_text(
+            chat_id=int(chat_id),
+            message_id=int(mid),
+            text=txt,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        log.info("prediction set panel refresh skipped: %s", e)
 
 
 async def render_pred_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,6 +211,10 @@ async def dispatch_pred_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     if op == "set" and len(parts) >= 3 and parts[2].isdigit():
         await _render_set_detail(update, context, int(parts[2]))
+        return
+
+    if op == "pv" and len(parts) >= 3 and parts[2].isdigit():
+        await _preview_set(update, context, int(parts[2]))
         return
 
     if op == "at" and len(parts) >= 3 and parts[2].isdigit():
@@ -375,12 +451,14 @@ async def handle_prediction_admin_message(update: Update, context: ContextTypes.
             async with factory() as session:
                 r = await session.get(PredictionSet, sid)
                 if r:
-                    p = _norm_payload(r.payload)
+                    p = _payload_deep(r.payload)
                     p[key].append(text)
                     r.payload = p
+                    flag_modified(r, "payload")
                     await session.commit()
             set_state(ud, None)
-            await msg.reply_text("✅ Added.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"pred:set:{sid}")]]))
+            await _refresh_set_detail_panel(context, ud, sid)
+            await msg.reply_text("✅ Added — panel counts updated.")
             return True
 
         if expect in ("delay_min", "delay_max", "reg_prob", "war_prob"):
@@ -420,19 +498,25 @@ async def handle_prediction_admin_message(update: Update, context: ContextTypes.
         sid = int(d.get("pred_set_id") or 0)
         sti = msg.sticker
         if not sti:
-            await msg.reply_text("Please send a sticker.")
+            await msg.reply_text(
+                "Send an actual <b>sticker</b> (tap the sticker tray — emoji typed as text is not stored).\n"
+                "Animated / video stickers work.",
+                parse_mode=ParseMode.HTML,
+            )
             return True
         fid = sti.file_id
         key = "win_stickers" if expect == "win_sticker" else "loss_stickers"
         async with factory() as session:
             r = await session.get(PredictionSet, sid)
             if r:
-                p = _norm_payload(r.payload)
+                p = _payload_deep(r.payload)
                 p[key].append(fid)
                 r.payload = p
+                flag_modified(r, "payload")
                 await session.commit()
         set_state(ud, None)
-        await msg.reply_text("✅ Sticker saved (file_id stored).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"pred:set:{sid}")]]))
+        await _refresh_set_detail_panel(context, ud, sid)
+        await msg.reply_text("✅ Sticker saved — check updated counts on the panel above.")
         return True
 
     if st == ST_PRED_MEDIA and expect in ("template", "result_image"):
@@ -444,18 +528,91 @@ async def handle_prediction_admin_message(update: Update, context: ContextTypes.
         async with factory() as session:
             r = await session.get(PredictionSet, sid)
             if r:
-                p = _norm_payload(r.payload)
+                p = _payload_deep(r.payload)
                 if expect == "template":
                     p["templates"].append(payload)
                 else:
                     p["result_images"].append(payload)
                 r.payload = p
+                flag_modified(r, "payload")
                 await session.commit()
         set_state(ud, None)
-        await msg.reply_text("✅ Saved.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f"pred:set:{sid}")]]))
+        await _refresh_set_detail_panel(context, ud, sid)
+        await msg.reply_text("✅ Saved — panel counts updated.")
         return True
 
     return False
+
+
+async def _preview_set(update: Update, context: ContextTypes.DEFAULT_TYPE, sid: int) -> None:
+    """Send sample messages to the admin's private chat (does not post to channel)."""
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        r = await session.get(PredictionSet, sid)
+        if not r:
+            await edit_or_send(update, context, text="Set not found.", reply_markup=pred_hub_kb())
+            return
+        p = _norm_payload(r.payload)
+
+    templates = [
+        t for t in (p.get("templates") or []) if isinstance(t, dict) and t.get("type") not in (None, "unsupported")
+    ]
+    if not templates:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"<b>Preview — set #{sid}</b>\n\n"
+                "Add at least one <b>Template</b> first, then preview again.\n"
+                "Stickers alone are not shown until there is a template (channel runs need it)."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"<b>Preview — set #{sid}</b>\n<i>Only you receive these messages.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await asyncio.sleep(0.2)
+
+    await send_content_to_chat(context.bot, chat_id=chat_id, content=dict(templates[0]), buttons_json=None)
+    await asyncio.sleep(0.25)
+
+    wins = [x for x in (p.get("win_stickers") or []) if isinstance(x, str) and len(x) > 3]
+    losses = [x for x in (p.get("loss_stickers") or []) if isinstance(x, str) and len(x) > 3]
+    if wins:
+        await context.bot.send_message(chat_id=chat_id, text="WIN sticker (sample):", parse_mode=ParseMode.HTML)
+        await context.bot.send_sticker(chat_id=chat_id, sticker=wins[0])
+        await asyncio.sleep(0.2)
+    if losses:
+        await context.bot.send_message(chat_id=chat_id, text="LOSS sticker (sample):", parse_mode=ParseMode.HTML)
+        await context.bot.send_sticker(chat_id=chat_id, sticker=losses[0])
+        await asyncio.sleep(0.2)
+
+    imgs = [x for x in (p.get("result_images") or []) if isinstance(x, dict) and x.get("type") and x.get("file_id")]
+    if imgs:
+        await context.bot.send_message(chat_id=chat_id, text="Result media (sample):", parse_mode=ParseMode.HTML)
+        await send_content_to_chat(context.bot, chat_id=chat_id, content=dict(imgs[0]), buttons_json=None)
+
+    regs = [x for x in (p.get("registers") or []) if isinstance(x, str) and x.strip()]
+    warns = [x for x in (p.get("warnings") or []) if isinstance(x, str) and x.strip()]
+    if regs:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"<b>Register line</b> (may appear before signal):\n{esc(regs[0])}",
+            parse_mode=ParseMode.HTML,
+        )
+    if warns:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"<b>Warning line</b> (may appear after signal):\n{esc(warns[0])}",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 # --- panels ---
@@ -491,41 +648,10 @@ async def _render_set_detail(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if not r:
             await edit_or_send(update, context, text="Set not found.", reply_markup=pred_hub_kb())
             return
-        p = _norm_payload(r.payload)
-        name, active, premium, weight = r.name, r.active, r.is_premium, r.weight
-    extra: list[list[InlineKeyboardButton]] = []
-    for cat, label, nkey, mx in (
-        ("win", "WIN", "win_stickers", 4),
-        ("los", "LOSS", "loss_stickers", 4),
-        ("tpl", "Tpl", "templates", 3),
-        ("img", "Res", "result_images", 3),
-        ("cap", "Cap", "captions", 4),
-        ("reg", "Reg", "registers", 3),
-        ("war", "War", "warnings", 3),
-    ):
-        arr = p.get(nkey) or []
-        for i, _it in enumerate(arr[:mx]):
-            extra.append(
-                [
-                    InlineKeyboardButton(
-                        f"🗑️ {label} {i}",
-                        callback_data=f"pred:rm:{sid}:{cat}:{i}",
-                    )
-                ]
-            )
-
-    txt = (
-        f"<b>Set #{sid}</b> — {esc(name)}\n"
-        f"Weight: <code>{weight}</code> · Premium: <code>{premium}</code> · Active: <code>{active}</code>\n\n"
-        f"Templates: <code>{len(p['templates'])}</code>\n"
-        f"WIN stickers: <code>{len(p['win_stickers'])}</code> · LOSS: <code>{len(p['loss_stickers'])}</code>\n"
-        f"Result media: <code>{len(p['result_images'])}</code>\n"
-        f"Captions: <code>{len(p['captions'])}</code> · Register lines: <code>{len(p['registers'])}</code> · Warnings: <code>{len(p['warnings'])}</code>"
-    )
-    markup = pred_set_detail_kb(sid, active, premium)
-    base = list(markup.inline_keyboard)
-    rows = base[:-2] + extra + base[-2:]
-    await edit_or_send(update, context, text=txt, reply_markup=InlineKeyboardMarkup(rows))
+        txt, kb = _compose_set_detail_view(r)
+    m = await edit_or_send(update, context, text=txt, reply_markup=kb)
+    context.user_data["panel_chat_id"] = m.chat_id
+    context.user_data["panel_message_id"] = m.message_id
 
 
 async def _toggle_set_active(update: Update, context: ContextTypes.DEFAULT_TYPE, sid: int) -> None:
@@ -576,12 +702,13 @@ async def _remove_pool_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         if not r:
             await render_pred_hub(update, context)
             return
-        p = _norm_payload(r.payload)
+        p = _payload_deep(r.payload)
         arr = list(p.get(key) or [])
         if 0 <= idx < len(arr):
             arr.pop(idx)
             p[key] = arr
             r.payload = p
+            flag_modified(r, "payload")
             await session.commit()
     await _render_set_detail(update, context, sid)
 

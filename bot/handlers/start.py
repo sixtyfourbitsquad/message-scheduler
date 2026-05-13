@@ -10,18 +10,16 @@ from bot.database.session import get_session_factory
 from bot.handlers.helpers import DASHBOARD_HTML
 from bot.keyboards.inline import kb_main_menu
 from bot.services.bot_user_service import record_bot_user_touch
-from bot.services.welcome_dm import send_welcome_for_subscriber
-from bot.services.welcome_service import get_or_create_welcome
 from bot.utils.fsm import reset_fsm
 
+
 _NON_ADMIN_START = (
-    "You're on the list for channel updates in this chat. "
-    "If you joined the channel before tapping Start here, your welcome message will arrive now."
+    "This bot manages a channel for its admins. You do not need to use commands here unless you were asked to."
 )
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admins get the dashboard; anyone else gets a short line so the bot may DM them later."""
+    """Admins get the dashboard; anyone else gets a short acknowledgement."""
     user = update.effective_user
     if not user:
         return
@@ -29,14 +27,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     factory = get_session_factory()
     async with factory() as session:
         await record_bot_user_touch(session, user)
-        w = await get_or_create_welcome(session)
-        delete_after = w.delete_after_seconds
-        await send_welcome_for_subscriber(
-            context.bot,
-            session,
-            user_id=int(user.id),
-            delete_after_seconds=delete_after,
-        )
         await session.commit()
 
     if user.id not in settings.admin_id_set:

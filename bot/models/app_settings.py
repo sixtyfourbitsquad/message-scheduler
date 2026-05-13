@@ -22,7 +22,7 @@ class AppSettings(Base):
 
     # Target public channel (numeric ID, often negative like -100...)
     target_channel_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    # Optional linked discussion supergroup (legacy / manual use; welcome uses channel joins)
+    # Optional linked discussion supergroup (legacy / manual use)
     discussion_group_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")

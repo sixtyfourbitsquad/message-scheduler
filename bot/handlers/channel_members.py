@@ -1,4 +1,4 @@
-"""Detect target channel joins/leaves: register subscribers, welcome in DM when possible."""
+"""Track joins/leaves on the configured channel (subscriber list for optional DM broadcasts)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from telegram.ext import ContextTypes
 from bot.database.session import get_session_factory
 from bot.services.channel_subscriber_service import record_channel_join, record_channel_leave
 from bot.services.settings_service import get_or_create_settings
-from bot.services.welcome_dm import send_welcome_for_subscriber
-from bot.services.welcome_service import get_or_create_welcome
 
 
 def _became_member(old: ChatMemberStatus, new: ChatMemberStatus) -> bool:
@@ -28,12 +26,7 @@ def _became_left(old: ChatMemberStatus, new: ChatMemberStatus) -> bool:
 
 
 async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Track subscribers on the configured public channel and send welcome DMs when allowed.
-
-    Telegram only allows DMs after the user has opened the bot (`/start`); until then we
-    still save them for subscriber broadcasts and deliver welcome on first `/start`.
-    """
+    """Upsert channel subscribers when users join/leave the target channel."""
     res = update.chat_member
     if not res or res.chat.type != ChatType.CHANNEL:
         return
@@ -62,13 +55,4 @@ async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         await record_channel_join(session, channel_id=ch_id, user=user)
-        await session.flush()
-        w = await get_or_create_welcome(session)
-        delete_after = w.delete_after_seconds
-        await send_welcome_for_subscriber(
-            context.bot,
-            session,
-            user_id=uid,
-            delete_after_seconds=delete_after,
-        )
         await session.commit()

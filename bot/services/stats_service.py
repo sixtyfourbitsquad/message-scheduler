@@ -13,7 +13,7 @@ from bot.models.broadcast_log import BroadcastLog
 from bot.models.channel_delivery_log import ChannelDeliveryLog
 from bot.models.failed_delivery import FailedDelivery
 from bot.models.schedule import Schedule
-from bot.services.channel_subscriber_service import count_active_subscribers, count_pending_welcome
+from bot.services.channel_subscriber_service import count_active_subscribers
 
 
 async def stats_snapshot(session: AsyncSession, *, started_at: datetime) -> dict[str, Any]:
@@ -39,7 +39,6 @@ async def stats_snapshot(session: AsyncSession, *, started_at: datetime) -> dict
     channel_posts_logged = await session.scalar(select(func.count()).select_from(ChannelDeliveryLog))
 
     active_subscribers = await count_active_subscribers(session)
-    pending_welcome = await count_pending_welcome(session)
 
     uptime = now - started_at.replace(tzinfo=timezone.utc)
     return {
@@ -53,5 +52,4 @@ async def stats_snapshot(session: AsyncSession, *, started_at: datetime) -> dict
         "active_users_30d": int(active_users_30d or 0),
         "channel_posts_logged": int(channel_posts_logged or 0),
         "active_subscribers": int(active_subscribers),
-        "pending_welcome": int(pending_welcome),
     }

@@ -1,7 +1,7 @@
 """
 Post serialized `content_json` payloads to a Telegram channel.
 
-Centralizes send logic for broadcasts, scheduled posts, and welcome previews.
+Centralizes send logic for broadcasts and scheduled posts (including subscriber DMs).
 """
 
 from __future__ import annotations

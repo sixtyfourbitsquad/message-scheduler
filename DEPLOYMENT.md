@@ -86,7 +86,7 @@ sudo journalctl -u channel-bot -f
 ### 6) Telegram channel checklist
 
 - Bot is **admin** in the target channel with permission to **post messages**.
-- For **welcome DMs** on channel join: keep the bot a **channel admin** so Telegram sends `chat_member` updates. Users must **`/start` the bot** in private first (Telegram only allows bots to DM users who have opened the chat).
+- For **subscriber tracking** (optional “broadcast to subscribers” DMs): keep the bot a **channel admin** so Telegram sends `chat_member` updates for joins/leaves.
 
 ### 7) Operational notes
 
@@ -97,44 +97,8 @@ sudo journalctl -u channel-bot -f
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS daily_slot_times JSONB;
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS content_pool_json JSONB;
 ALTER TABLE schedules ADD COLUMN IF NOT EXISTS jitter_seconds INTEGER;
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS use_prediction_engine BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS prediction_options JSONB;
-```
-
-- Prediction engine tables are created on bot startup (`create_all`). On an existing database you can rely on the same startup step, or create manually:
-
-```sql
-CREATE TABLE IF NOT EXISTS prediction_sets (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(128) NOT NULL DEFAULT 'set',
-  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  is_premium BOOLEAN NOT NULL DEFAULT false,
-  active BOOLEAN NOT NULL DEFAULT true,
-  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  notes TEXT,
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS prediction_engine_states (
-  schedule_id INTEGER PRIMARY KEY,
-  channel_id BIGINT NOT NULL,
-  state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS prediction_run_logs (
-  id SERIAL PRIMARY KEY,
-  schedule_id INTEGER NOT NULL,
-  set_id INTEGER,
-  outcome VARCHAR(8),
-  manual_test BOOLEAN NOT NULL DEFAULT false,
-  ok BOOLEAN NOT NULL DEFAULT true,
-  detail TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS ix_prediction_run_logs_schedule_id ON prediction_run_logs (schedule_id);
-CREATE INDEX IF NOT EXISTS ix_prediction_run_logs_set_id ON prediction_run_logs (set_id);
 ```
 
 - The app calls `setWebhook` on startup using `WEBHOOK_BASE_URL` + `WEBHOOK_PATH`.
 - Schedules are stored in PostgreSQL and reloaded into APScheduler on startup and after Settings “Restart scheduler”.
 - If you change DNS or TLS, reload Nginx and restart the service.
-- After pulling prediction-engine changes: if the service crashes on import with `IndentationError` in `bot/handlers/callbacks.py` (`_schedule_save`), run `git pull` again — `main` includes a follow-up commit that corrects that block.

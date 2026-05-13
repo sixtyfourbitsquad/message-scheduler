@@ -11,7 +11,6 @@ from bot.keyboards.inline import (
     kb_scheduler_entry,
     kb_settings_menu,
     kb_stats_refresh,
-    kb_welcome_menu,
     kb_yes_no_skip,
 )
 
@@ -28,6 +27,5 @@ __all__ = [
     "kb_scheduler_entry",
     "kb_settings_menu",
     "kb_stats_refresh",
-    "kb_welcome_menu",
     "kb_yes_no_skip",
 ]

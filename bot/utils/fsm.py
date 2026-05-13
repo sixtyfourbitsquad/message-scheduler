@@ -26,15 +26,6 @@ ST_SCH_INTERVAL = "sch_interval"
 ST_SCH_TITLE = "sch_title"
 ST_SCH_PREVIEW = "sch_preview"
 
-# Welcome flow
-ST_WEL_WAIT_CONTENT = "wel_content"
-ST_WEL_TEXT = "wel_text"
-ST_WEL_MEDIA = "wel_media"
-ST_WEL_BUTTONS = "wel_buttons"
-ST_WEL_BTN_TEXT = "wel_btn_text"
-ST_WEL_BTN_URL = "wel_btn_url"
-ST_WEL_DELETE_AFTER = "wel_del"
-
 # Settings
 ST_SET_CHANNEL = "set_channel"
 ST_SET_DISCUSSION = "set_discussion"

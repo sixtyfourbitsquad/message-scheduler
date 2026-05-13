@@ -1,4 +1,4 @@
-"""Channel join/leave registry for subscriber broadcasts and welcome tracking."""
+"""Channel join/leave registry for optional subscriber DM broadcasts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from bot.models.channel_subscriber import ChannelSubscriber
 
 
 async def record_channel_join(session: AsyncSession, *, channel_id: int, user: User) -> ChannelSubscriber:
-    """Upsert subscriber on join; clears welcome lock so rejoiners can get welcome again."""
+    """Upsert subscriber on join."""
     now = datetime.now(tz=timezone.utc)
     uid = int(user.id)
     row = await session.get(ChannelSubscriber, uid)
@@ -22,7 +22,6 @@ async def record_channel_join(session: AsyncSession, *, channel_id: int, user: U
         row.joined_channel_at = now
         row.left_channel_at = None
         row.unsubscribed = False
-        row.welcome_sent_at = None
         return row
     row = ChannelSubscriber(
         telegram_user_id=uid,
@@ -54,14 +53,5 @@ async def list_active_subscriber_ids(session: AsyncSession) -> list[int]:
 async def count_active_subscribers(session: AsyncSession) -> int:
     n = await session.scalar(
         select(func.count()).select_from(ChannelSubscriber).where(ChannelSubscriber.unsubscribed.is_(False))
-    )
-    return int(n or 0)
-
-
-async def count_pending_welcome(session: AsyncSession) -> int:
-    n = await session.scalar(
-        select(func.count())
-        .select_from(ChannelSubscriber)
-        .where(ChannelSubscriber.unsubscribed.is_(False), ChannelSubscriber.welcome_sent_at.is_(None))
     )
     return int(n or 0)

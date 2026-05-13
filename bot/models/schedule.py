@@ -6,8 +6,8 @@ Scheduled posts: one-time, daily, weekly, or custom interval.
 
 `daily_slot_times`: optional list of "HH:MM" strings (same `kind=daily`); one APScheduler job per slot.
 
-`content_pool_json`: optional list of message payloads; each run picks one at random (e.g. many
-prediction texts). Fill via SQL/API or a future UI — same shape as `message_to_content_dict` output.
+`content_pool_json`: optional list of message payloads; each run picks one at random (e.g. rotating
+variants). Fill via SQL/API if needed — same shape as `message_to_content_dict` output.
 
 `jitter_seconds`: optional max random delay after the cron fires (capped in code).
 """
@@ -16,7 +16,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -55,17 +55,12 @@ class Schedule(Base):
 
     # When set (e.g. 6 IST peak times), `kind` stays `daily` and one APScheduler job is created per slot.
     daily_slot_times: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
-    # If non-empty, each run picks one entry at random (predictions / bulk). Otherwise uses `content_json`.
+    # If non-empty, each run picks one entry at random. Otherwise uses `content_json`.
     content_pool_json: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB, nullable=True)
     # Max random delay in seconds after the cron fires (0 = none). Spreads load slightly.
     jitter_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
-
-    # When true, scheduled run uses `prediction_sets` + anti-repeat state instead of content_pool.
-    use_prediction_engine: Mapped[bool] = mapped_column(Boolean, default=False)
-    # typing, typing_before_media, inter_message_delay_min/max, register_probability, warning_probability
-    prediction_options: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     buttons_json: Mapped[Optional[list[list[dict[str, str]]]]] = mapped_column(JSONB, nullable=True)

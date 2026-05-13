@@ -1,4 +1,4 @@
-"""Users detected joining the target channel (broadcast audience + welcome tracking)."""
+"""Users detected joining the target channel (optional subscriber broadcast fan-out)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class ChannelSubscriber(Base):
     """
     One row per Telegram user seen joining the configured public channel.
 
-    Used for: deferred welcome DMs after `/start`, and optional broadcast fan-out.
+    Used for: optional broadcast fan-out to subscribers who have used /start with the bot.
     """
 
     __tablename__ = "channel_subscribers"

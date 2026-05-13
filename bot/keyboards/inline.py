@@ -14,14 +14,10 @@ def kb_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("📂 Scheduled Posts", callback_data="m:lst"),
-            InlineKeyboardButton("👋 Welcome Message", callback_data="m:wel"),
-        ],
-        [
             InlineKeyboardButton("⚙️ Settings", callback_data="m:cfg"),
-            InlineKeyboardButton("📊 Statistics", callback_data="m:st"),
         ],
         [
-            InlineKeyboardButton("🎲 Prediction engine", callback_data="m:pred"),
+            InlineKeyboardButton("📊 Statistics", callback_data="m:st"),
         ],
     ]
     return InlineKeyboardMarkup(rows)
@@ -107,20 +103,6 @@ def kb_schedule_preview() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("💾 Save schedule", callback_data="sch:save")],
             [InlineKeyboardButton("❌ Cancel", callback_data="sch:cancel")],
-        ]
-    )
-
-
-def kb_welcome_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🔛 Toggle enable", callback_data="wel:toggle")],
-            [InlineKeyboardButton("📩 Set welcome #1 (forward or send)", callback_data="wel:set")],
-            [InlineKeyboardButton("🔗 Buttons: text then link", callback_data="wel:btn")],
-            [InlineKeyboardButton("📣 Test-post to channel", callback_data="wel:ch")],
-            [InlineKeyboardButton("💬 Test-send to me (private)", callback_data="wel:dm")],
-            [InlineKeyboardButton("🧹 Auto-delete seconds", callback_data="wel:del")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="m:home")],
         ]
     )
 

@@ -17,12 +17,10 @@ from bot.keyboards.inline import (
     kb_button_builder_controls,
     kb_schedule_preview,
     kb_settings_menu,
-    kb_welcome_menu,
     kb_yes_no_skip,
 )
 from bot.models.schedule import ScheduleKind
 from bot.services.settings_service import get_or_create_settings
-from bot.services.welcome_service import get_or_create_welcome
 from bot.utils.inline_keyboard_json import append_button_row, validate_http_url
 from bot.utils.message_serialize import message_to_content_dict
 from bot.utils import timezones as tzutil
@@ -40,10 +38,6 @@ from bot.utils.fsm import (
     ST_SCH_TIME,
     ST_SCH_WAIT_CONTENT,
     ST_SCH_WEEKDAY,
-    ST_WEL_BTN_TEXT,
-    ST_WEL_BTN_URL,
-    ST_WEL_DELETE_AFTER,
-    ST_WEL_WAIT_CONTENT,
     get_data,
     get_state,
     set_state,
@@ -101,13 +95,7 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ud = context.user_data
     st = get_state(ud)
 
-    from bot.handlers.prediction_admin import ST_PRED_MEDIA, ST_PRED_STICK, ST_PRED_TEXT, handle_prediction_admin_message
-
-    if st in (ST_PRED_TEXT, ST_PRED_MEDIA, ST_PRED_STICK):
-        if await handle_prediction_admin_message(update, context):
-            return
-
-    if st in {ST_BC_BUTTON_URL, ST_SCH_BUTTON_URL, ST_WEL_BTN_URL}:
+    if st in {ST_BC_BUTTON_URL, ST_SCH_BUTTON_URL}:
         await _capture_button_url(update, context)
         return
 
@@ -203,49 +191,6 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await _render_sch_preview_panel(update, context)
         return
 
-    if st == ST_WEL_WAIT_CONTENT:
-        payload = message_to_content_dict(msg)
-        if payload.get("type") == "unsupported":
-            await msg.reply_text(payload.get("hint", "Unsupported message."))
-            return
-        async with get_session_factory()() as session:
-            w = await get_or_create_welcome(session)
-            w.content_json = payload
-            w.text = None
-            w.media_json = None
-            await session.commit()
-        set_state(ud, None)
-        await msg.reply_text(
-            "✅ Welcome #1 saved. Add URL buttons from the Welcome menu if you want; "
-            "those buttons are used for join DMs, test-to-channel, and test-to-you.",
-            reply_markup=kb_welcome_menu(),
-        )
-        return
-
-    if st == ST_WEL_BTN_TEXT:
-        label = (msg.text or "").strip()
-        if not label:
-            await msg.reply_text("Please send non-empty button text.")
-            return
-        get_data(ud)["pending_btn_text"] = label
-        set_state(ud, ST_WEL_BTN_URL)
-        await msg.reply_text("Now send the button URL (must start with http/https).")
-        return
-
-    if st == ST_WEL_DELETE_AFTER:
-        s = (msg.text or "").strip()
-        if not s.isdigit():
-            await msg.reply_text("Send an integer (seconds).")
-            return
-        secs = int(s)
-        async with get_session_factory()() as session:
-            w = await get_or_create_welcome(session)
-            w.delete_after_seconds = None if secs == 0 else secs
-            await session.commit()
-        set_state(ud, None)
-        await msg.reply_text("✅ Auto-delete updated.", reply_markup=kb_welcome_menu())
-        return
-
 
 async def _capture_button_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
@@ -270,8 +215,6 @@ async def _capture_button_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         set_state(ud, ST_BC_BUTTON_TEXT)
     elif st == ST_SCH_BUTTON_URL:
         set_state(ud, ST_SCH_BUTTON_TEXT)
-    elif st == ST_WEL_BTN_URL:
-        set_state(ud, ST_WEL_BTN_TEXT)
 
     await msg.reply_text("Button added. Send another label, or press Done.", reply_markup=kb_button_builder_controls())
 

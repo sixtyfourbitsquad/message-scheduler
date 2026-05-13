@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from datetime import datetime, timezone
 from sqlalchemy import delete, select, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -23,10 +22,8 @@ from bot.keyboards.inline import (
     kb_scheduler_entry,
     kb_settings_menu,
     kb_stats_refresh,
-    kb_welcome_menu,
 )
 from bot.models.broadcast_log import BroadcastLog
-from bot.models.prediction_engine_state import PredictionEngineState
 from bot.models.schedule import Schedule, ScheduleKind
 from bot.scheduler.manager import BotScheduler
 from bot.services.broadcast_fanout_service import fanout_dm_to_subscribers
@@ -35,7 +32,6 @@ from bot.services.channel_subscriber_service import list_active_subscriber_ids
 from bot.services.content_poster import send_content_to_chat
 from bot.services.settings_service import get_or_create_settings
 from bot.services.stats_service import stats_snapshot
-from bot.services.welcome_service import effective_welcome_content, get_or_create_welcome
 from bot.utils import timezones as tzutil
 from bot.utils.fsm import (
     ST_BC_BUTTON_TEXT,
@@ -53,10 +49,6 @@ from bot.utils.fsm import (
     ST_SCH_TIME,
     ST_SCH_WAIT_CONTENT,
     ST_SCH_WEEKDAY,
-    ST_WEL_BTN_TEXT,
-    ST_WEL_BTN_URL,
-    ST_WEL_DELETE_AFTER,
-    ST_WEL_WAIT_CONTENT,
     get_data,
     get_state,
     reset_fsm,
@@ -125,28 +117,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _render_schedule_list(update, context)
         return
 
-    if data == "m:wel":
-        await _render_welcome_menu(update, context)
-        return
-
     if data == "m:cfg":
         await _render_settings(update, context)
         return
 
     if data == "m:st":
         await _render_stats(update, context)
-        return
-
-    if data == "m:pred":
-        from bot.handlers.prediction_admin import render_pred_hub
-
-        await render_pred_hub(update, context)
-        return
-
-    if data.startswith("pred:"):
-        from bot.handlers.prediction_admin import dispatch_pred_callback
-
-        await dispatch_pred_callback(update, context, data)
         return
 
     # ---- Broadcast wizard ----
@@ -324,14 +300,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             _remember_panel_message(m, context.user_data)
             return
-        if ctx == "wel" and st in {ST_WEL_BTN_TEXT, ST_WEL_BTN_URL}:
-            async with get_session_factory()() as session:
-                w = await get_or_create_welcome(session)
-                w.buttons_json = get_data(context.user_data).get("buttons") or None
-                await session.commit()
-            reset_fsm(context.user_data)
-            await _render_welcome_menu(update, context)
-            return
         return
 
     if data == "btn:cancel":
@@ -368,162 +336,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("lst:dd:"):
         sid = int(data.split(":")[2])
         await _delete_schedule(update, context, sid)
-        return
-
-    # ---- Welcome ----
-    if data == "wel:toggle":
-        factory = get_session_factory()
-        async with factory() as session:
-            w = await get_or_create_welcome(session)
-            w.enabled = not bool(w.enabled)
-            await session.commit()
-        await _render_welcome_menu(update, context)
-        return
-    if data == "wel:set":
-        set_state(context.user_data, ST_WEL_WAIT_CONTENT)
-        await edit_or_send(
-            update,
-            context,
-            text=(
-                "<b>Set welcome message #1</b>\n\n"
-                "<b>Forward</b> one message here, or send the same kind of message directly.\n"
-                "Supported: text, photo/video/GIF with caption, document, audio, voice.\n\n"
-                "<i>Tip:</i> formatting and captions are kept when possible."
-            ),
-            reply_markup=kb_welcome_menu(),
-        )
-        return
-    if data == "wel:dm":
-        user = update.effective_user
-        if not user:
-            return
-        factory = get_session_factory()
-        async with factory() as session:
-            w = await get_or_create_welcome(session)
-            content = effective_welcome_content(w)
-            buttons = w.buttons_json
-        if not content:
-            await edit_or_send(
-                update,
-                context,
-                text="❌ No welcome content yet. Use <b>Set welcome #1</b> first.",
-                reply_markup=kb_welcome_menu(),
-            )
-            return
-        try:
-            mid = await send_content_to_chat(
-                context.bot, chat_id=user.id, content=content, buttons_json=buttons
-            )
-            if mid:
-                await edit_or_send(
-                    update,
-                    context,
-                    text="✅ Sent a copy to your private chat with the bot (with buttons if configured).",
-                    reply_markup=kb_welcome_menu(),
-                )
-            else:
-                await edit_or_send(
-                    update,
-                    context,
-                    text="❌ Could not send (unsupported content?).",
-                    reply_markup=kb_welcome_menu(),
-                )
-        except Exception as e:
-            await edit_or_send(
-                update,
-                context,
-                text=f"❌ Send failed:\n<pre>{esc(repr(e))}</pre>",
-                reply_markup=kb_welcome_menu(),
-            )
-        return
-    if data == "wel:ch":
-        factory = get_session_factory()
-        async with factory() as session:
-            cfg = await get_or_create_settings(session)
-            channel_id = cfg.target_channel_id
-            w = await get_or_create_welcome(session)
-            content = effective_welcome_content(w)
-            buttons = w.buttons_json
-        if not channel_id:
-            await edit_or_send(
-                update,
-                context,
-                text="❌ Set target channel in ⚙️ Settings first.",
-                reply_markup=kb_welcome_menu(),
-            )
-            return
-        if not content:
-            await edit_or_send(
-                update,
-                context,
-                text="❌ No welcome content yet. Use <b>Set welcome #1</b> first.",
-                reply_markup=kb_welcome_menu(),
-            )
-            return
-        try:
-            mid = await send_content_to_chat(
-                context.bot, chat_id=channel_id, content=content, buttons_json=buttons
-            )
-            if mid:
-                async with get_session_factory()() as session:
-                    await record_channel_delivery(
-                        session,
-                        channel_id=int(channel_id),
-                        kind="welcome_test",
-                        admin_id=update.effective_user.id if update.effective_user else None,
-                    )
-                    await session.commit()
-                await edit_or_send(
-                    update,
-                    context,
-                    text="✅ Posted a copy to your target channel (with buttons if configured).",
-                    reply_markup=kb_welcome_menu(),
-                )
-            else:
-                await edit_or_send(
-                    update,
-                    context,
-                    text="❌ Could not post (unsupported content?).",
-                    reply_markup=kb_welcome_menu(),
-                )
-        except Exception as e:
-            await edit_or_send(
-                update,
-                context,
-                text=f"❌ Post failed:\n<pre>{esc(repr(e))}</pre>",
-                reply_markup=kb_welcome_menu(),
-            )
-        return
-    if data == "wel:btn":
-        d = get_data(context.user_data)
-        d["btn_ctx"] = "wel"
-        async with get_session_factory()() as session:
-            w = await get_or_create_welcome(session)
-            existing = w.buttons_json
-        d["buttons"] = deepcopy(existing) if existing else []
-        d["btn_newrow"] = True
-        set_state(context.user_data, ST_WEL_BTN_TEXT)
-        await edit_or_send(
-            update,
-            context,
-            text=(
-                "<b>URL buttons</b> under the welcome (used for join DMs, test-to-channel, "
-                "and test-to-you).\n\n"
-                "<b>1.</b> Send the button text.\n"
-                "<b>2.</b> Send the link (<code>https://…</code>).\n"
-                "Repeat for more buttons, then tap <b>Done</b>."
-            ),
-            reply_markup=kb_button_builder_controls(),
-        )
-        return
-    if data == "wel:del":
-        set_state(context.user_data, ST_WEL_DELETE_AFTER)
-        await edit_or_send(
-            update,
-            context,
-            text="Send auto-delete seconds as an integer (e.g. <code>30</code>), or <code>0</code> to disable.",
-            reply_markup=kb_welcome_menu(),
-        )
         return
 
     # ---- Settings ----
@@ -883,9 +695,6 @@ async def _schedule_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         existing = None
         if eid:
             existing = await session.get(Schedule, int(eid))
-        if existing:
-            row.use_prediction_engine = bool(existing.use_prediction_engine)
-            row.prediction_options = existing.prediction_options
 
         if eid and existing:
             pause_saved = existing.paused
@@ -966,9 +775,6 @@ async def _render_schedule_detail(update: Update, context: ContextTypes.DEFAULT_
             txt += f"Content pool entries: <code>{len(r.content_pool_json)}</code> (random each run)\n"
         if r.jitter_seconds:
             txt += f"Jitter (max delay after trigger): <code>{r.jitter_seconds}</code>s\n"
-        txt += f"Prediction engine: <code>{r.use_prediction_engine}</code>\n"
-        if r.prediction_options:
-            txt += f"Prediction options: <code>{esc(str(r.prediction_options))}</code>\n"
     await edit_or_send(update, context, text=txt, reply_markup=kb_posts_row(sid))
 
 
@@ -990,7 +796,6 @@ async def _pause_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, si
 async def _delete_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, sid: int) -> None:
     factory = get_session_factory()
     async with factory() as session:
-        await session.execute(delete(PredictionEngineState).where(PredictionEngineState.schedule_id == sid))
         await session.execute(delete(Schedule).where(Schedule.id == sid))
         await session.commit()
     mgr = BotScheduler.instance()
@@ -1042,23 +847,6 @@ async def _begin_schedule_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         _remember_panel_message(m, context.user_data)
 
 
-async def _render_welcome_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    factory = get_session_factory()
-    async with factory() as session:
-        w = await get_or_create_welcome(session)
-        content = effective_welcome_content(w)
-        ctype = content.get("type") if content else None
-        nrows = len(w.buttons_json or [])
-        txt = (
-            "<b>👋 Welcome message</b>\n\n"
-            f"Enabled: <code>{w.enabled}</code>\n"
-            f"Auto-delete: <code>{w.delete_after_seconds or 0}</code>s\n"
-            f"Content type: <code>{esc(str(ctype or 'none'))}</code>\n"
-            f"Button rows: <code>{nrows}</code>\n"
-        )
-    await edit_or_send(update, context, text=txt, reply_markup=kb_welcome_menu())
-
-
 async def _render_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     factory = get_session_factory()
     async with factory() as session:
@@ -1082,15 +870,14 @@ async def _render_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "<b>📊 Statistics</b>\n\n"
         "<b>Channel subscribers</b>\n"
         f"Active (still in channel): <code>{snap['active_subscribers']}</code>\n"
-        f"Welcome pending (no successful welcome DM yet): <code>{snap['pending_welcome']}</code>\n"
-        "<i>Subscribers are recorded on channel join; DMs require users to /start the bot.</i>\n\n"
+        "<i>Subscribers are recorded when the bot sees joins on the target channel (optional DM broadcasts).</i>\n\n"
         "<b>Users</b>\n"
         f"Total who used /start: <code>{snap['total_bot_users']}</code>\n"
         f"Active (last 7 days): <code>{snap['active_users_7d']}</code>\n"
         f"Active (last 30 days): <code>{snap['active_users_30d']}</code>\n\n"
         "<b>Channel posts (via bot, logged)</b>\n"
         f"Total delivered: <code>{snap['channel_posts_logged']}</code>\n"
-        "<i>Counts broadcasts, scheduler runs, welcome test-to-channel, and subscriber DMs.</i>\n\n"
+        "<i>Counts broadcasts, scheduled runs, and subscriber DMs when used.</i>\n\n"
         "<b>Schedules</b>\n"
         f"Total schedule rows: <code>{snap['total_schedules']}</code>\n"
         f"Active (not paused): <code>{snap['active_schedules']}</code>\n\n"

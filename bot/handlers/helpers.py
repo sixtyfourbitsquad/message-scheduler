@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 DASHBOARD_HTML = (
     "<b>🏠 CHANNEL CONTROL PANEL</b>\n\n"
-    "This is your private automation cockpit.\n"
+    "Broadcast to your channel, build URL buttons, and schedule recurring or one-off posts.\n"
     "Use the buttons below — everything stays in one message when possible.\n"
 )
 

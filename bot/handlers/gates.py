@@ -9,15 +9,13 @@ from bot.config.settings import settings
 from bot.database.session import get_session_factory
 from bot.services.channel_service import user_can_manage_channel
 from bot.services.settings_service import get_or_create_settings
-from bot.handlers.prediction_admin import ST_PRED_MEDIA, ST_PRED_STICK, ST_PRED_TEXT
 from bot.utils.fsm import ST_SET_CHANNEL, ST_SET_DISCUSSION, ST_SET_TZ, get_state
 
 _SETTINGS_STATES = {ST_SET_CHANNEL, ST_SET_DISCUSSION, ST_SET_TZ}
-_PRED_FSM_STATES = {ST_PRED_TEXT, ST_PRED_MEDIA, ST_PRED_STICK}
 
 
 def _settings_escape_callback(data: str) -> bool:
-    return data.startswith("cfg:") or data.startswith("pred:") or data in {"m:home", "m:cfg"}
+    return data.startswith("cfg:") or data in {"m:home", "m:cfg"}
 
 
 async def ensure_dashboard_access(
@@ -56,7 +54,7 @@ async def ensure_dashboard_access(
 
     if update.message:
         st = get_state(context.user_data)
-        if st in _SETTINGS_STATES or st in _PRED_FSM_STATES:
+        if st in _SETTINGS_STATES:
             return True, None
 
     return False, (
